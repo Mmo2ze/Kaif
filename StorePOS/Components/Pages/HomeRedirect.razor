@@ -1,0 +1,15 @@
+@page "/"
+@layout EmptyLayout
+@implements IAllowAnonymous
+@inject AppState App
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        if (App.IsAuthenticated)
+            Nav.NavigateTo("/pos", replace: true);
+        else
+            Nav.NavigateTo("/login", replace: true);
+    }
+}

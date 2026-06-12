@@ -1,0 +1,472 @@
+@using System.Globalization
+@using StoreShared.Sales
+@inject RefundService Refunds
+@inject AppState App
+@inject StoreSettingsService StoreSettings
+@inject IReceiptPrintService ReceiptPrinter
+@inject ToastService Toasts
+
+@if (Visible)
+{
+    <div class="pos-modal-backdrop" @onclick="CloseAsync">
+        <div class="pos-modal pos-refund-modal" @onclick:stopPropagation="true">
+            <h2>Process refund</h2>
+
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <p class="error" role="alert">@_error</p>
+            }
+            @if (!string.IsNullOrWhiteSpace(_success))
+            {
+                <p class="success-banner" role="status">@_success</p>
+            }
+
+            @if (_step == 1)
+            {
+                <p class="muted small">Scan the receipt barcode or type the Receipt ID (e.g. RCP-00123).</p>
+                <div class="field">
+                    <label for="refund-receipt-id">Receipt ID</label>
+                    <input id="refund-receipt-id"
+                           class="input touch-input mono"
+                           value="@_receiptInput"
+                           @oninput="OnReceiptInputAsync"
+                           @onkeydown="OnReceiptKeyDown"
+                           autocomplete="off"
+                           placeholder="RCP-00001" />
+                </div>
+                <div class="pos-modal-actions">
+                    <button type="button" class="btn secondary" @onclick="CloseAsync">Cancel</button>
+                    <button type="button" class="btn primary" disabled="@_busy" @onclick="LookupReceiptAsync">
+                        @if (_busy)
+                        {
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                        }
+                        Next
+                    </button>
+                </div>
+            }
+            else if (_step == 2 && _sale is not null)
+            {
+                <div class="refund-sale-summary">
+                    <p><strong>@_sale.ReceiptNumber</strong> · @_sale.Timestamp.LocalDateTime.ToString("g") · @_sale.CashierUsername</p>
+                    <p class="muted small">Total paid: @MoneyFormat.Format(_sale.TotalAmount, StoreSettings.CurrencyLabel)</p>
+                    @if (_sale.IsFullyRefunded)
+                    {
+                        <p class="error">This receipt has already been fully refunded.</p>
+                    }
+                </div>
+
+                <div class="refund-type-row">
+                    <label class="refund-type-option">
+                        <input type="radio" name="refund-type" checked="@(_refundType == RefundType.Full)" @onchange="() => SetRefundType(RefundType.Full)" />
+                        Full refund
+                    </label>
+                    <label class="refund-type-option">
+                        <input type="radio" name="refund-type" checked="@(_refundType == RefundType.Partial)" @onchange="() => SetRefundType(RefundType.Partial)" />
+                        Partial refund
+                    </label>
+                </div>
+
+                @if (_refundType == RefundType.Full)
+                {
+                    <ul class="refund-lines-preview">
+                        @foreach (var line in _sale.Lines.Where(l => l.QuantityAvailable > 0))
+                        {
+                            <li>
+                                <span>@line.ProductName @line.Size × @line.QuantityAvailable</span>
+                                <span>@MoneyFormat.Format(line.UnitPrice * line.QuantityAvailable, StoreSettings.CurrencyLabel)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <div class="table-wrap refund-lines-table">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Size</th>
+                                <th class="col-num">Avail</th>
+                                <th class="col-num">Refund qty</th>
+                                <th class="col-money">Amount</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var line in _partialLines)
+                            {
+                                <tr class="@(line.HasError ? "refund-line-error" : "")">
+                                    <td>@line.ProductName</td>
+                                    <td>@line.Size</td>
+                                    <td class="col-num">@line.Available</td>
+                                    <td class="col-num">
+                                        <input type="number" class="input" min="0" max="@line.Available"
+                                               @bind="line.RefundQty" @bind:after="RecalcRefundTotal" />
+                                    </td>
+                                    <td class="col-money">@MoneyFormat.Format(line.LineAmount, StoreSettings.CurrencyLabel)</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                <p class="refund-running-total">
+                    <strong>Refund amount:</strong> @MoneyFormat.Format(_refundPreviewAmount, StoreSettings.CurrencyLabel)
+                </p>
+
+                <div class="pos-modal-actions">
+                    <button type="button" class="btn secondary touch-target" @onclick="BackToStep1">Back</button>
+                    <button type="button" class="btn primary touch-target" disabled="@(!CanProceedStep2 || _busy)" @onclick="ConfirmRefundAsync">
+                        @if (_busy)
+                        {
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                        }
+                        Refund @MoneyFormat.Format(_refundPreviewAmount, StoreSettings.CurrencyLabel)
+                    </button>
+                </div>
+            }
+            else if (_step == 3 && _lastResult is not null && _sale is not null)
+            {
+                <p class="success-banner">Refund of @MoneyFormat.Format(_lastResult.AmountRefunded, StoreSettings.CurrencyLabel) processed.</p>
+                <p class="mono muted small">@_lastResult.RefundReceiptNumber</p>
+                <div class="pos-modal-actions">
+                    <button type="button" class="btn secondary" @onclick="PrintRefundReceiptAsync">Print refund receipt</button>
+                    <button type="button" class="btn primary" @onclick="FinishAsync">Done</button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public string? InitialReceipt { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnCompleted { get; set; }
+
+    private int _step = 1;
+    private string _receiptInput = "";
+    private string? _error;
+    private string? _success;
+    private bool _busy;
+    private SaleByReceiptDto? _sale;
+    private RefundType _refundType = RefundType.Full;
+    private readonly List<PartialLine> _partialLines = new();
+    private decimal _refundPreviewAmount;
+    private RefundResultDto? _lastResult;
+    private IReadOnlyList<SaleEventLineDto> _refundedLines = Array.Empty<SaleEventLineDto>();
+
+    private CancellationTokenSource? _debounceCts;
+    private bool _wasVisible;
+    private string? _lastInitialReceipt;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Visible)
+        {
+            _wasVisible = false;
+            _lastInitialReceipt = null;
+            return;
+        }
+
+        var prefill = InitialReceipt?.Trim();
+        if (!_wasVisible || prefill != _lastInitialReceipt)
+        {
+            Reset();
+            _lastInitialReceipt = prefill;
+            if (!string.IsNullOrWhiteSpace(prefill))
+            {
+                _receiptInput = prefill;
+                await LookupReceiptAsync();
+            }
+        }
+
+        _wasVisible = true;
+    }
+
+    private bool CanProceedStep2 =>
+        _sale is not null
+        && !_sale.IsFullyRefunded
+        && (_refundType == RefundType.Full
+            ? _sale.Lines.Any(l => l.QuantityAvailable > 0)
+            : _partialLines.Any(l => l.RefundQty > 0 && !l.HasError));
+
+    private async Task OnReceiptKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await LookupReceiptAsync();
+    }
+
+    private async Task OnReceiptInputAsync(ChangeEventArgs e)
+    {
+        _receiptInput = e.Value?.ToString() ?? "";
+        _debounceCts?.Cancel();
+        _debounceCts = new CancellationTokenSource();
+        var token = _debounceCts.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            if (_step == 1 && _receiptInput.Length >= 8 && ReceiptNumberFormat.TryParseSaleId(_receiptInput, out _))
+                await LookupReceiptAsync();
+        }
+        catch (TaskCanceledException)
+        {
+            //
+        }
+    }
+
+    private void SetRefundType(RefundType type)
+    {
+        _refundType = type;
+        RecalcRefundTotal();
+    }
+
+    private void RecalcRefundTotal()
+    {
+        if (_sale is null)
+        {
+            _refundPreviewAmount = 0;
+            return;
+        }
+
+        if (_refundType == RefundType.Full)
+        {
+            var available = _sale.Lines.Where(l => l.QuantityAvailable > 0).ToList();
+            var noPriorRefunds = _sale.Lines.All(l => l.AlreadyRefunded == 0);
+            _refundPreviewAmount = noPriorRefunds && available.Count == _sale.Lines.Count
+                ? _sale.TotalAmount
+                : available.Sum(l => l.UnitPrice * l.QuantityAvailable);
+            return;
+        }
+
+        foreach (var line in _partialLines)
+        {
+            line.HasError = line.RefundQty > line.Available;
+            line.LineAmount = line.RefundQty * line.UnitPrice;
+        }
+
+        _refundPreviewAmount = _partialLines.Where(l => !l.HasError).Sum(l => l.LineAmount);
+    }
+
+    private async Task LookupReceiptAsync()
+    {
+        _error = null;
+        _success = null;
+        if (string.IsNullOrWhiteSpace(_receiptInput))
+        {
+            _error = "Enter a Receipt ID.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _sale = await Refunds.GetSaleByReceiptAsync(_receiptInput.Trim());
+            if (_sale is null)
+            {
+                _error = "Receipt ID not found — please check and try again.";
+                return;
+            }
+
+            _partialLines.Clear();
+            foreach (var line in _sale.Lines)
+            {
+                _partialLines.Add(new PartialLine
+                {
+                    SkuId = line.SkuId,
+                    ProductName = line.ProductName,
+                    Size = line.Size,
+                    Available = line.QuantityAvailable,
+                    UnitPrice = line.UnitPrice,
+                    RefundQty = 0,
+                });
+            }
+
+            if (_sale.IsFullyRefunded)
+            {
+                _error = "This receipt has already been fully refunded.";
+                return;
+            }
+
+            _refundType = RefundType.Full;
+            RecalcRefundTotal();
+            _step = 2;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            _error = "Could not load receipt — check you are signed in as admin and the API is running.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void BackToStep1()
+    {
+        _step = 1;
+        _sale = null;
+        _error = null;
+    }
+
+    private async Task ConfirmRefundAsync()
+    {
+        if (_sale is null)
+            return;
+
+        _error = null;
+        if (_refundType == RefundType.Partial)
+        {
+            foreach (var line in _partialLines)
+            {
+                if (line.RefundQty > line.Available)
+                {
+                    line.HasError = true;
+                    _error = $"Quantity exceeds available to refund for {line.ProductName}.";
+                    return;
+                }
+            }
+
+            if (!_partialLines.Any(l => l.RefundQty > 0))
+            {
+                _error = "Select at least one item to refund.";
+                return;
+            }
+        }
+
+        _busy = true;
+        try
+        {
+            IReadOnlyList<RefundLineDto>? lines = null;
+            if (_refundType == RefundType.Partial)
+            {
+                lines = _partialLines
+                    .Where(l => l.RefundQty > 0)
+                    .Select(l => new RefundLineDto(l.SkuId, l.RefundQty))
+                    .ToList();
+            }
+
+            var request = new RefundRequestDto(_sale.ReceiptNumber, _refundType, lines);
+
+            var result = await Refunds.ProcessRefundAsync(request);
+            if (result is null || !result.Success)
+            {
+                _error = result?.Error ?? "Refund failed.";
+                if (_error.Contains("exceeds", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var pl in _partialLines)
+                        pl.HasError = pl.RefundQty > pl.Available;
+                    _step = 2;
+                }
+                return;
+            }
+
+            _lastResult = result;
+            _refundedLines = BuildRefundedLines();
+            _success = $"Refund of {result.AmountRefunded:0.00} EGP processed";
+            Toasts.Success(_success);
+            _step = 3;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private IReadOnlyList<SaleEventLineDto> BuildRefundedLines()
+    {
+        if (_sale is null)
+            return Array.Empty<SaleEventLineDto>();
+
+        if (_refundType == RefundType.Full)
+        {
+            return _sale.Lines
+                .Where(l => l.QuantityAvailable > 0)
+                .Select(l => new SaleEventLineDto(
+                    l.SkuId,
+                    l.ProductName,
+                    l.Size,
+                    l.QuantityAvailable,
+                    l.UnitPrice,
+                    l.UnitPrice * l.QuantityAvailable))
+                .ToList();
+        }
+
+        return _partialLines
+            .Where(l => l.RefundQty > 0)
+            .Select(l => new SaleEventLineDto(
+                l.SkuId,
+                l.ProductName,
+                l.Size,
+                l.RefundQty,
+                l.UnitPrice,
+                l.LineAmount))
+            .ToList();
+    }
+
+    private async Task PrintRefundReceiptAsync()
+    {
+        if (_lastResult is null || _sale is null)
+            return;
+
+        var dto = RefundReceiptPrintHelper.FromRefund(
+            _lastResult,
+            _sale,
+            _refundType,
+            App.Username,
+            null,
+            _refundedLines,
+            StoreSettings.StoreName,
+            StoreSettings.ReceiptLandline,
+            StoreSettings.ReceiptPhone);
+
+        if (ReceiptPrinter.PrintRefundReceipt(dto))
+            Toasts.Success("Refund receipt sent to printer.");
+        else
+            Toasts.Error("Could not print — check receipt printer in Settings.");
+    }
+
+    private async Task FinishAsync()
+    {
+        await OnCompleted.InvokeAsync();
+        await CloseAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        Reset();
+        await OnClose.InvokeAsync();
+    }
+
+    private void Reset()
+    {
+        _step = 1;
+        _receiptInput = "";
+        _error = null;
+        _success = null;
+        _sale = null;
+        _lastResult = null;
+        _partialLines.Clear();
+    }
+
+    private sealed class PartialLine
+    {
+        public int SkuId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string Size { get; set; } = "";
+        public int Available { get; set; }
+        public int RefundQty { get; set; }
+        public decimal UnitPrice { get; set; }
+        public decimal LineAmount { get; set; }
+        public bool HasError { get; set; }
+    }
+}

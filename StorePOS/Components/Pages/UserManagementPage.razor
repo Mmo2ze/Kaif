@@ -1,0 +1,322 @@
+@page "/users"
+@layout MainLayout
+@attribute [AdminRoute]
+@using System.Net
+@using System.Net.Http
+@using System.Net.Http.Json
+@using StoreShared
+@using StoreShared.Auth
+@inject HttpClient Http
+@inject AppState App
+@inject ToastService Toasts
+@inject IJSRuntime Js
+
+<PageTitle>User management</PageTitle>
+
+<h1>User management</h1>
+
+@if (_error is not null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+
+<div class="user-toolbar">
+    <button type="button" class="btn primary touch-target" @onclick="OpenAddModal" disabled="@_loading">Add user</button>
+    <button type="button" class="btn secondary touch-target" @onclick="ReloadAsync" disabled="@_loading">
+        @if (_loading)
+        {
+            <span class="spinner spinner-sm" aria-hidden="true"></span>
+        }
+        @(_loading ? "Loading…" : "Refresh")
+    </button>
+</div>
+
+@if (_rows is null)
+{
+    <p class="loading-with-spinner">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Loading…</span>
+    </p>
+}
+else
+{
+    <div class="table-wrap">
+        <table class="stock-table">
+            <thead>
+            <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var u in _rows)
+            {
+                <tr>
+                    <td>@u.Username</td>
+                    <td>@u.Role</td>
+                    <td>@(u.IsActive ? "Active" : "Inactive")</td>
+                    <td class="actions">
+                        <button type="button" class="btn-link" @onclick="() => OpenResetModal(u)" disabled="@(!u.IsActive)">Reset password</button>
+                        <button type="button"
+                                class="btn-link"
+                                @onclick="() => DeactivateAsync(u)"
+                                disabled="@(!u.IsActive || u.Id == App.UserId)">
+                            Deactivate
+                        </button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_showAdd)
+{
+    <div class="modal-backdrop" @onclick="CloseAddModal"></div>
+    <div class="modal-panel" @onclick:stopPropagation="true">
+        <div class="modal-header">
+            <h2 class="modal-title">Add user</h2>
+            <button type="button" class="btn secondary modal-close touch-target" @onclick="CloseAddModal">Close</button>
+        </div>
+        <div class="modal-body">
+            <div class="field">
+                <label for="add-user">Username</label>
+                <input id="add-user" class="input touch-input" @bind="_addUsername" @bind:event="oninput" autocomplete="off" />
+            </div>
+            <div class="field">
+                <label for="add-pass">Password</label>
+                <input id="add-pass" type="text" class="input touch-input" @bind="_addPassword" @bind:event="oninput" autocomplete="new-password" />
+            </div>
+            <div class="field">
+                <label for="add-role">Role</label>
+                <select id="add-role" class="input touch-input" @bind="_addRole">
+                    <option value="@nameof(UserRole.Admin)">Admin</option>
+                    <option value="@nameof(UserRole.Seller)">Seller</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn secondary touch-target" @onclick="CloseAddModal">Cancel</button>
+                <button type="button" class="btn primary touch-target" disabled="@_addBusy" @onclick="CreateUserAsync">
+                    @if (_addBusy)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    @(_addBusy ? "Saving…" : "Create")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showReset && _resetTarget is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseResetModal"></div>
+    <div class="modal-panel" @onclick:stopPropagation="true">
+        <div class="modal-header">
+            <h2 class="modal-title">Reset password — @_resetTarget.Username</h2>
+            <button type="button" class="btn secondary modal-close touch-target" @onclick="CloseResetModal">Close</button>
+        </div>
+        <div class="modal-body">
+            <div class="field">
+                <label for="reset-pass">New password</label>
+                <input id="reset-pass" type="text" class="input touch-input" @bind="_resetPassword" @bind:event="oninput" autocomplete="new-password" />
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn secondary touch-target" @onclick="CloseResetModal">Cancel</button>
+                <button type="button" class="btn primary touch-target" disabled="@_resetBusy" @onclick="ResetPasswordAsync">
+                    @if (_resetBusy)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    @(_resetBusy ? "Saving…" : "Save")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<UserAdminRowDto>? _rows;
+    private string? _error;
+    private bool _loading;
+
+    private bool _showAdd;
+    private string _addUsername = "";
+    private string _addPassword = "";
+    private string _addRole = nameof(UserRole.Seller);
+    private bool _addBusy;
+
+    private bool _showReset;
+    private UserAdminRowDto? _resetTarget;
+    private string _resetPassword = "";
+    private bool _resetBusy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _error = null;
+        _loading = true;
+        try
+        {
+            _rows = await Http.GetFromJsonAsync<List<UserAdminRowDto>>("api/users", AppJson.Options) ?? new();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+            _rows ??= new();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OpenAddModal()
+    {
+        _error = null;
+        _addUsername = "";
+        _addPassword = "";
+        _addRole = nameof(UserRole.Seller);
+        _showAdd = true;
+    }
+
+    private void CloseAddModal() => _showAdd = false;
+
+    private async Task CreateUserAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_addUsername) || string.IsNullOrWhiteSpace(_addPassword))
+        {
+            _error = "Username and password are required.";
+            Toasts.Error(_error);
+            return;
+        }
+
+        if (!Enum.TryParse<UserRole>(_addRole, out var role))
+            role = UserRole.Seller;
+
+        _error = null;
+        _addBusy = true;
+        try
+        {
+            using var resp = await Http.PostAsJsonAsync(
+                "api/users",
+                new CreateUserRequest(_addUsername.Trim(), _addPassword, role),
+                AppJson.Options);
+            if (resp.StatusCode == HttpStatusCode.Conflict)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Username already exists." : _error);
+                return;
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not create user." : _error);
+                return;
+            }
+
+            _showAdd = false;
+            Toasts.Success("User created");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _addBusy = false;
+        }
+    }
+
+    private void OpenResetModal(UserAdminRowDto u)
+    {
+        _error = null;
+        _resetTarget = u;
+        _resetPassword = "";
+        _showReset = true;
+    }
+
+    private void CloseResetModal()
+    {
+        _showReset = false;
+        _resetTarget = null;
+    }
+
+    private async Task ResetPasswordAsync()
+    {
+        if (_resetTarget is null || string.IsNullOrWhiteSpace(_resetPassword))
+        {
+            _error = "Enter a new password.";
+            Toasts.Error(_error);
+            return;
+        }
+
+        _error = null;
+        _resetBusy = true;
+        try
+        {
+            using var resp = await Http.PutAsJsonAsync(
+                $"api/users/{_resetTarget.Id}/password",
+                new ResetPasswordRequest(_resetPassword),
+                AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not reset password." : _error);
+                return;
+            }
+
+            CloseResetModal();
+            Toasts.Success("Password updated");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _resetBusy = false;
+        }
+    }
+
+    private async Task DeactivateAsync(UserAdminRowDto u)
+    {
+        if (u.Id == App.UserId)
+            return;
+
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", $"Deactivate user '{u.Username}'?");
+        if (!ok)
+            return;
+
+        _error = null;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Put, $"api/users/{u.Id}/deactivate");
+            using var resp = await Http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not deactivate user." : _error);
+                return;
+            }
+
+            Toasts.Success($"User '{u.Username}' deactivated");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+    }
+}

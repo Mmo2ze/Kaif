@@ -1,0 +1,251 @@
+html, body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    margin: 0;
+}
+
+a {
+    color: #5c3a21;
+}
+
+.error {
+    color: #b00020;
+}
+
+.muted {
+    color: #8a7866;
+}
+
+.content {
+    padding: 1rem 1.25rem;
+    max-width: 60rem;
+}
+
+.top-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.65rem 1rem;
+    background: #5c3a21;
+    color: #fff;
+}
+
+.top-bar a {
+    color: #fff;
+}
+
+.brand {
+    font-weight: 700;
+}
+
+.user-pill {
+    font-size: 0.9rem;
+    opacity: 0.95;
+}
+
+.main-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-left: 0.5rem;
+}
+
+.nav-logout {
+    margin-left: auto;
+    font-size: 0.9rem;
+}
+
+.login-wrap {
+    min-height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    box-sizing: border-box;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 22rem;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    background: #fff;
+}
+
+.field {
+    margin-bottom: 1rem;
+}
+
+.field label {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.input {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid #d9ccc0;
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+.btn.primary {
+    padding: 0.6rem 1rem;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    background: #5c3a21;
+    color: #fff;
+}
+
+.full-width {
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: #5c3a21;
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+}
+
+.admin-card {
+    margin: 1.5rem 0;
+    padding: 1.25rem;
+    border: 1px solid #e7ddd3;
+    border-radius: 8px;
+    background: #faf7f4;
+    max-width: 52rem;
+}
+
+.admin-card h2 {
+    margin-top: 0;
+    font-size: 1.1rem;
+}
+
+.admin-card.highlight {
+    border-color: #5c3a21;
+    background: #f7efe7;
+}
+
+.mono {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.95rem;
+}
+
+.barcode-block {
+    margin: 0.75rem 0;
+}
+
+.barcode-img {
+    max-width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+}
+
+.btn.secondary {
+    padding: 0.55rem 0.9rem;
+    border: 1px solid #5c3a21;
+    border-radius: 4px;
+    background: #fff;
+    color: #5c3a21;
+    cursor: pointer;
+    font-size: 0.95rem;
+}
+
+.catalog-root {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.catalog-model {
+    margin-bottom: 0.5rem;
+    border: 1px solid #e7ddd3;
+    border-radius: 6px;
+    background: #fff;
+}
+
+.expand-summary {
+    cursor: pointer;
+    padding: 0.65rem 0.75rem;
+    font-weight: 600;
+}
+
+.sku-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.sku-table th,
+.sku-table td {
+    padding: 0.45rem 0.75rem;
+    border-top: 1px solid #efe6dc;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.sku-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.sku-actions .thumb {
+    height: 36px;
+    width: auto;
+    image-rendering: pixelated;
+}
+
+.px-3 {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+}
+
+.scan-card {
+    margin-top: 1.5rem;
+}
+
+.scan-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.scan-row label {
+    width: 100%;
+}
+
+.scan-input {
+    flex: 1;
+    min-width: 12rem;
+}
+
+.scan-result {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: 6px;
+    border: 1px solid #e7ddd3;
+    background: #faf7f4;
+}
+
+.scan-result.low-stock-box {
+    border-color: #e57373;
+    background: #ffebee;
+}
+
+.stock-line {
+    font-size: 1.15rem;
+    margin: 0.5rem 0;
+}

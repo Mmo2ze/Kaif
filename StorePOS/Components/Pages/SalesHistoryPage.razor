@@ -1,0 +1,931 @@
+@page "/sales"
+@layout MainLayout
+@using System.Globalization
+@using System.Text
+@using StoreShared.Auth
+@using StoreShared.Sales
+@inject SaleService Sales
+@inject RefundService Refunds
+@inject AppState App
+@inject StoreSettingsService StoreSettings
+@inject ToastService Toasts
+@inject IJSRuntime Js
+
+<PageTitle>@(IsAdmin ? "Sales history" : "My sales")</PageTitle>
+
+<h1>@(IsAdmin ? "Sales history" : "My sales")</h1>
+
+@if (IsAdmin)
+{
+    <div class="sales-tabs">
+        <button type="button" class="btn @(_tab == "sales" ? "primary" : "secondary")" @onclick='() => SetTabAsync("sales")'>Sales</button>
+        <button type="button" class="btn @(_tab == "stats" ? "primary" : "secondary")" @onclick='() => SetTabAsync("stats")'>Statistics</button>
+        <button type="button" class="btn @(_tab == "audit" ? "primary" : "secondary")" @onclick='() => SetTabAsync("audit")'>Audit log</button>
+        <button type="button" class="btn secondary" style="margin-left:auto" @onclick="OpenRefundModal">Refund</button>
+    </div>
+}
+
+<RefundModal Visible="@_refundOpen" InitialReceipt="@_refundPrefill" OnClose="CloseRefundModal" OnCompleted="OnRefundCompletedAsync" />
+
+@if (_statsLoading && _tab == "stats")
+{
+    <div class="page-loading-overlay" aria-busy="true">
+        <div class="page-loading-inner">
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Loading statistics…</span>
+        </div>
+    </div>
+}
+
+@if (!IsAdmin)
+{
+    <p class="muted">Your sales for the current UTC calendar day. Date filters and export are not available.</p>
+}
+else if (_tab == "sales")
+{
+    <p class="muted">Date range uses UTC day boundaries. Summary metrics (except today's revenue) use the selected range.</p>
+}
+
+@if (_error is not null && (_tab == "sales" || !IsAdmin))
+{
+    <p class="error">@_error</p>
+}
+@if (_statsError is not null && _tab == "stats")
+{
+    <p class="error">@_statsError</p>
+}
+@if (_auditError is not null && _tab == "audit")
+{
+    <p class="error">@_auditError</p>
+}
+
+@if (_summary is not null && (_tab == "sales" || !IsAdmin))
+{
+    <section class="sales-money-panel">
+        <div class="sales-money-hero">
+            <span class="sales-money-hero-label">Net revenue (selected range)</span>
+            <span class="sales-money-hero-value">@MoneyFormat.Format(_summary.RangeNetRevenue, StoreSettings.CurrencyLabel)</span>
+            <span class="sales-money-hero-hint muted">Gross sales minus refunds in this date range</span>
+        </div>
+        <div class="sales-money-breakdown">
+            <div class="sales-money-row sales-money-row-gross">
+                <span class="sales-money-row-label">Gross sales</span>
+                <span class="sales-money-row-value">@MoneyFormat.Format(_summary.RangeTotalRevenue, StoreSettings.CurrencyLabel)</span>
+            </div>
+            <div class="sales-money-row sales-money-row-refund">
+                <span class="sales-money-row-label">Refunded</span>
+                <span class="sales-money-row-value">− @MoneyFormat.Format(_summary.RangeRefunded, StoreSettings.CurrencyLabel)</span>
+            </div>
+            <div class="sales-money-row">
+                <span class="sales-money-row-label">Net profit</span>
+                <span class="sales-money-row-value">@MoneyFormat.Format(_summary.RangeNetProfit, StoreSettings.CurrencyLabel)</span>
+            </div>
+        </div>
+        <div class="sales-summary-grid sales-summary-grid-secondary">
+            <div class="sales-card">
+                <div class="sales-card-label">Transactions</div>
+                <div class="sales-card-value">@_summary.RangeTransactionCount</div>
+            </div>
+            <div class="sales-card">
+                <div class="sales-card-label">Avg sale</div>
+                <div class="sales-card-value">@MoneyFormat.Format(_summary.RangeAverageSale, StoreSettings.CurrencyLabel)</div>
+            </div>
+            <div class="sales-card">
+                <div class="sales-card-label">Today net (UTC)</div>
+                <div class="sales-card-value">@MoneyFormat.Format(_summary.TodayNetRevenue, StoreSettings.CurrencyLabel)</div>
+                <div class="muted sales-card-sub">Profit today: @MoneyFormat.Format(_summary.TodayNetProfit, StoreSettings.CurrencyLabel)</div>
+            </div>
+            <div class="sales-card">
+                <div class="sales-card-label">Top model (qty)</div>
+                <div class="sales-card-value">
+                    @if (string.IsNullOrEmpty(_summary.TopModelName))
+                    {
+                        <span class="muted">—</span>
+                    }
+                    else
+                    {
+                        <span>@_summary.TopModelName</span>
+                        <span class="muted sales-card-sub">(@_summary.TopModelQuantitySold pcs)</span>
+                    }
+                </div>
+            </div>
+        </div>
+    </section>
+}
+
+@if (IsAdmin && _tab == "stats" && _statsLoading && _stats is null)
+{
+    <p class="loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading statistics…</p>
+}
+else if (IsAdmin && _tab == "stats" && !_statsLoading && _stats is null)
+{
+    <section class="sales-stats-panel">
+        <p class="muted">Statistics could not be loaded. @(_statsError ?? "Check the message above and tap Refresh.")</p>
+        <button type="button" class="btn primary" @onclick="LoadStatisticsAsync">Refresh stats</button>
+    </section>
+}
+else if (IsAdmin && _tab == "stats" && _stats is not null)
+{
+    <section class="sales-stats-panel">
+        <div class="sales-filter-field">
+            <label>Range</label>
+            <select class="input" @bind="_statsPreset" @bind:after="OnStatsPresetChangedAsync">
+                <option value="today">Today</option>
+                <option value="week">This week</option>
+                <option value="month">This month</option>
+                <option value="custom">Custom</option>
+            </select>
+        </div>
+        @if (_statsPreset == "custom")
+        {
+            <div class="sales-filter-field"><label>From</label><InputDate class="input" @bind-Value="_from" /></div>
+            <div class="sales-filter-field"><label>To</label><InputDate class="input" @bind-Value="_to" /></div>
+        }
+        <button type="button" class="btn primary" disabled="@_statsLoading" @onclick="LoadStatisticsAsync">Refresh stats</button>
+
+        <div class="sales-money-hero">
+            <span class="sales-money-hero-label">Net revenue (range)</span>
+            <span class="sales-money-hero-value">@MoneyFormat.Format(_stats.TotalRevenue - _stats.TotalAmountRefunded, StoreSettings.CurrencyLabel)</span>
+        </div>
+        <div class="sales-money-breakdown">
+            <div class="sales-money-row sales-money-row-gross">
+                <span class="sales-money-row-label">Gross sales</span>
+                <span class="sales-money-row-value">@MoneyFormat.Format(_stats.TotalRevenue, StoreSettings.CurrencyLabel)</span>
+            </div>
+            <div class="sales-money-row sales-money-row-refund">
+                <span class="sales-money-row-label">Refunded</span>
+                <span class="sales-money-row-value">− @MoneyFormat.Format(_stats.TotalAmountRefunded, StoreSettings.CurrencyLabel)</span>
+            </div>
+            <div class="sales-money-row">
+                <span class="sales-money-row-label">Net profit</span>
+                <span class="sales-money-row-value">@MoneyFormat.Format(_stats.NetProfit, StoreSettings.CurrencyLabel)</span>
+            </div>
+        </div>
+
+        <h3 class="settings-section-title">Sales overview</h3>
+        <div class="sales-summary-grid sales-summary-grid-secondary">
+            <div class="sales-card"><div class="sales-card-label">Sales count</div><div class="sales-card-value">@_stats.TotalSalesCount</div></div>
+            <div class="sales-card"><div class="sales-card-label">Avg order</div><div class="sales-card-value">@MoneyFormat.Format(_stats.AverageOrderValue, StoreSettings.CurrencyLabel)</div></div>
+            <div class="sales-card"><div class="sales-card-label">Items sold</div><div class="sales-card-value">@_stats.TotalItemsSold</div></div>
+            <div class="sales-card"><div class="sales-card-label">Refund count</div><div class="sales-card-value">@_stats.TotalRefundsCount</div></div>
+        </div>
+
+        <h3 class="settings-section-title">Refunds detail</h3>
+        <div class="sales-summary-grid sales-summary-grid-secondary">
+            <div class="sales-card"><div class="sales-card-label">Refund rate</div><div class="sales-card-value">@_stats.RefundRatePercent.ToString("0.0", CultureInfo.InvariantCulture)%</div></div>
+            <div class="sales-card"><div class="sales-card-label">Most refunded</div><div class="sales-card-value">@(_stats.MostRefundedProductName ?? "—") (@_stats.MostRefundedProductCount)</div></div>
+        </div>
+
+        <div class="sales-stats-columns">
+            <div>
+                <h4>Top selling SKUs</h4>
+                <ul class="stats-list">
+                    @foreach (var s in _stats.TopSellingSkus)
+                    {
+                        <li>@s.ProductName @s.Size — @s.Quantity pcs · @MoneyFormat.Format(s.Revenue, StoreSettings.CurrencyLabel) · profit @MoneyFormat.Format(s.Profit, StoreSettings.CurrencyLabel)</li>
+                    }
+                </ul>
+            </div>
+            <div>
+                <h4>Top refunded SKUs</h4>
+                <ul class="stats-list">
+                    @foreach (var s in _stats.TopRefundedSkus)
+                    {
+                        <li>@s.ProductName @s.Size — @s.Quantity refunded</li>
+                    }
+                </ul>
+            </div>
+        </div>
+
+        <h4 class="stats-section-heading">Sales per cashier</h4>
+        <div class="stats-rows-card">
+            @if (_stats.SalesPerCashier.Count == 0)
+            {
+                <p class="muted stats-rows-empty">No sales in this range.</p>
+            }
+            @foreach (var c in _stats.SalesPerCashier)
+            {
+                <div class="stats-row">
+                    <span class="stats-row-name">@c.Username</span>
+                    <span class="stats-row-meta">@c.Count sale@(c.Count == 1 ? "" : "s")</span>
+                    <span class="stats-row-amount">@MoneyFormat.Format(c.Amount, StoreSettings.CurrencyLabel)</span>
+                </div>
+            }
+        </div>
+
+        <h4 class="stats-section-heading">Refunds per cashier</h4>
+        <div class="stats-rows-card">
+            @if (_stats.RefundsPerCashier.Count == 0)
+            {
+                <p class="muted stats-rows-empty">No refunds in this range.</p>
+            }
+            @foreach (var c in _stats.RefundsPerCashier)
+            {
+                <div class="stats-row">
+                    <span class="stats-row-name">@c.Username</span>
+                    <span class="stats-row-meta">@c.Count refund@(c.Count == 1 ? "" : "s")</span>
+                    <span class="stats-row-amount">@MoneyFormat.Format(c.Amount, StoreSettings.CurrencyLabel)</span>
+                </div>
+            }
+        </div>
+
+        <h4 class="stats-section-heading">Daily sales vs refunds</h4>
+        <div class="stats-rows-card">
+            @if (_statsDailyRows.Count == 0)
+            {
+                <p class="muted stats-rows-empty">No activity in this range.</p>
+            }
+            @foreach (var row in _statsDailyRows)
+            {
+                <div class="stats-daily-row">
+                    <span class="stats-row-name">@row.Date.ToString("yyyy-MM-dd")</span>
+                    <div class="stats-daily-cols">
+                        <span><span class="muted">Sales</span> @MoneyFormat.Format(row.SalesAmount, StoreSettings.CurrencyLabel) <span class="muted">(@row.SalesCount)</span></span>
+                        <span><span class="muted">Refunds</span> @MoneyFormat.Format(row.RefundAmount, StoreSettings.CurrencyLabel) <span class="muted">(@row.RefundCount)</span></span>
+                        <span><span class="muted">Profit</span> @MoneyFormat.Format(row.ProfitAmount, StoreSettings.CurrencyLabel)</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+}
+
+@if (IsAdmin && _tab == "audit")
+{
+    <section class="sales-filters">
+        <div class="sales-filter-field"><label>From</label><InputDate class="input" @bind-Value="_from" /></div>
+        <div class="sales-filter-field"><label>To</label><InputDate class="input" @bind-Value="_to" /></div>
+        <div class="sales-filter-field">
+            <label>Event type</label>
+            <select class="input" @bind="_auditEventTypeRaw">
+                <option value="">All</option>
+                @foreach (var t in Enum.GetValues<SaleEventType>())
+                {
+                    <option value="@t">@t</option>
+                }
+            </select>
+        </div>
+        <div class="sales-filter-field">
+            <label>Performed by</label>
+            <input class="input" @bind="_auditPerformedBy" placeholder="Username" />
+        </div>
+        <button type="button" class="btn primary" disabled="@_auditLoading" @onclick="ApplyAuditFiltersAsync">Apply</button>
+        <button type="button" class="btn secondary" disabled="@_loading" @onclick="ExportAuditAsync">Export CSV</button>
+    </section>
+
+    @if (_auditLoading)
+    {
+        <p class="loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading audit log…</p>
+    }
+    else if (_auditResult is not null && _auditResult.Items.Count == 0)
+    {
+        <p class="muted">No events in this date range.</p>
+    }
+    else if (_auditResult is not null)
+    {
+        <div class="table-wrap">
+            <table class="sales-table">
+                <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Receipt #</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>By</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                @foreach (var ev in _auditResult.Items)
+                {
+                    <tr>
+                        <td>@ev.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td class="mono">@ev.ReceiptNumber</td>
+                        <td>@ev.EventType</td>
+                        <td>@(ev.AmountAffected is null ? "—" : MoneyFormat.Format(ev.AmountAffected.Value, StoreSettings.CurrencyLabel))</td>
+                        <td>@ev.PerformedBy</td>
+                        <td>
+                            @if (ev.Lines is { Count: > 0 })
+                            {
+                                <button type="button" class="btn-link" @onclick="() => ToggleAuditExpand(ev.EventId)">Details</button>
+                            }
+                        </td>
+                    </tr>
+                    @if (_auditExpanded.Contains(ev.EventId) && ev.Lines is not null)
+                    {
+                        <tr class="sales-row-detail"><td colspan="6">
+                            <ul class="stats-list">
+                                @foreach (var ln in ev.Lines)
+                                {
+                                    <li>@ln.Quantity × @ln.ProductName @ln.Size — @MoneyFormat.Format(ln.LineTotal, StoreSettings.CurrencyLabel)</li>
+                                }
+                            </ul>
+                        </td></tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+        <div class="sales-pager">
+            <button type="button" class="btn secondary" disabled="@(_auditPage <= 1)" @onclick="AuditPrevAsync">Previous</button>
+            <span class="muted">Page @_auditPage of @AuditTotalPages (@_auditResult.TotalCount events)</span>
+            <button type="button" class="btn secondary" disabled="@(_auditPage >= AuditTotalPages)" @onclick="AuditNextAsync">Next</button>
+        </div>
+    }
+}
+
+<section class="sales-filters" style="@((_tab != "sales" && IsAdmin) ? "display:none" : null)">
+    @if (IsAdmin)
+    {
+        <div class="sales-filter-field">
+            <label for="sales-from">From</label>
+            <InputDate id="sales-from" class="input" @bind-Value="_from" />
+        </div>
+        <div class="sales-filter-field">
+            <label for="sales-to">To</label>
+            <InputDate id="sales-to" class="input" @bind-Value="_to" />
+        </div>
+        <div class="sales-filter-field">
+            <label for="sales-cashier">Cashier</label>
+            <select id="sales-cashier" class="input" value="@(_filterSellerId?.ToString() ?? "")" @onchange="OnSellerFilterChange">
+                <option value="">All cashiers</option>
+                @foreach (var u in _staff)
+                {
+                    <option value="@u.Id">@u.Username (@u.Role)</option>
+                }
+            </select>
+        </div>
+        <div class="sales-filter-actions">
+            <button type="button" class="btn primary" disabled="@_loading" @onclick="ApplyFiltersAsync">
+                @if (_loading)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                Apply
+            </button>
+            <button type="button" class="btn secondary" disabled="@_loading" @onclick="ExportAsync">Export CSV</button>
+        </div>
+    }
+    else
+    {
+        <p class="muted sales-seller-date-hint">Date: @DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) (UTC)</p>
+        <button type="button" class="btn primary" disabled="@_loading" @onclick="ApplyFiltersAsync">
+            @if (_loading)
+            {
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+            }
+            Refresh
+        </button>
+    }
+</section>
+
+@if (_loading && _pageResult is null && (_tab == "sales" || !IsAdmin))
+{
+    <p>Loading…</p>
+}
+else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
+{
+    <div class="sales-pager">
+        <span class="muted">Page @_page of @TotalPages · @_pageResult.TotalCount sale(s)</span>
+        <div class="sales-pager-btns">
+            <button type="button" class="btn secondary" disabled="@(_page <= 1 || _loading)" @onclick="PrevPageAsync">Previous</button>
+            <button type="button" class="btn secondary" disabled="@(_page >= TotalPages || _loading)" @onclick="NextPageAsync">Next</button>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="sales-table">
+            <thead>
+            <tr>
+                <th class="col-time">Date / time</th>
+                <th class="col-receipt">Receipt ID</th>
+                @if (IsAdmin)
+                {
+                    <th>Status</th>
+                }
+                <th>Cashier</th>
+                <th class="col-num">Items</th>
+                <th class="col-money">Subtotal</th>
+                <th class="col-money">Discount</th>
+                <th class="col-money">Total</th>
+                @if (IsAdmin)
+                {
+                    <th></th>
+                }
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var row in _pageResult.Items)
+            {
+                <tr class="sales-row-head @( _expanded.Contains(row.Id) ? "is-open" : "")" @onclick="() => ToggleDetailAsync(row.Id)">
+                    <td>@row.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)</td>
+                    <td class="mono col-receipt" @onclick:stopPropagation="true">@DisplayReceipt(row)</td>
+                    @if (IsAdmin)
+                    {
+                        <td>
+                            @if (row.IsFullyRefunded)
+                            {
+                                <span class="badge-refunded">Refunded</span>
+                            }
+                            else if (row.TotalRefunded > 0)
+                            {
+                                <span class="badge-partial">Partial</span>
+                            }
+                        </td>
+                    }
+                    <td>@row.CashierUsername</td>
+                    <td class="col-num">@row.UnitCount <span class="muted">(@(row.LineCount) ln)</span></td>
+                    <td class="col-money">@MoneyFormat.Format(row.Subtotal, StoreSettings.CurrencyLabel)</td>
+                    <td class="col-money">@MoneyFormat.Format(row.DiscountAmount, StoreSettings.CurrencyLabel)</td>
+                    <td class="col-money"><strong>@MoneyFormat.Format(row.TotalAmount, StoreSettings.CurrencyLabel)</strong></td>
+                    @if (IsAdmin)
+                    {
+                        <td @onclick:stopPropagation="true">
+                            @if (!row.IsFullyRefunded)
+                            {
+                                <button type="button" class="btn secondary btn-sm" @onclick="() => OpenRefundForRow(DisplayReceipt(row))">Refund</button>
+                            }
+                        </td>
+                    }
+                </tr>
+                @if (_expanded.Contains(row.Id) && _details.TryGetValue(row.Id, out var detail))
+                {
+                    <tr class="sales-row-detail">
+                        <td colspan="@(IsAdmin ? 9 : 7)">
+                            <div class="sales-detail-inner">
+                                <table class="sales-lines-table">
+                                    <thead>
+                                    <tr>
+                                        <th>Product</th>
+                                        <th>Size</th>
+                                        <th>Barcode</th>
+                                        <th class="col-num">Qty</th>
+                                        <th class="col-money">Unit</th>
+                                        <th class="col-money">Line</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    @foreach (var line in detail.Lines)
+                                    {
+                                        <tr>
+                                            <td>@line.ProductModelName</td>
+                                            <td>@line.Size</td>
+                                            <td class="mono">@line.Barcode</td>
+                                            <td class="col-num">@line.Quantity</td>
+                                            <td class="col-money">@MoneyFormat.Format(line.UnitPrice, StoreSettings.CurrencyLabel)</td>
+                                            <td class="col-money">@MoneyFormat.Format(line.LineTotal, StoreSettings.CurrencyLabel)</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                else if (_expanded.Contains(row.Id))
+                {
+                    <tr class="sales-row-detail">
+                        <td colspan="@(IsAdmin ? 9 : 7)"><p class="muted px-3 loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading lines…</p></td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private readonly List<UserListItemDto> _staff = new();
+    private readonly HashSet<int> _expanded = new();
+    private readonly Dictionary<int, SaleHistoryDetailDto> _details = new();
+    private readonly HashSet<int> _auditExpanded = new();
+
+    private string _tab = "sales";
+    private bool _refundOpen;
+    private string? _refundPrefill;
+
+    private DateOnly _from;
+    private DateOnly _to;
+    private int? _filterSellerId;
+    private int _page = 1;
+    private const int _pageSize = 20;
+
+    private SalesSummaryDto? _summary;
+    private PagedSalesResult? _pageResult;
+    private SalesStatisticsDto? _stats;
+    private string _statsPreset = "today";
+    private PagedSaleEventsResult? _auditResult;
+    private int _auditPage = 1;
+    private string _auditEventTypeRaw = "";
+    private string _auditPerformedBy = "";
+
+    private string? _error;
+    private string? _statsError;
+    private string? _auditError;
+    private bool _loading;
+    private bool _statsLoading;
+    private bool _auditLoading;
+    private List<StatsDailyRow> _statsDailyRows = new();
+
+    private bool IsAdmin => string.Equals(App.Role, nameof(UserRole.Admin), StringComparison.OrdinalIgnoreCase);
+
+    private static string DisplayReceipt(SaleHistoryRowDto row) =>
+        string.IsNullOrWhiteSpace(row.ReceiptNumber)
+            ? ReceiptNumberFormat.ForSale(row.Id)
+            : row.ReceiptNumber;
+
+    private int TotalPages => _pageResult is null || _pageResult.TotalCount == 0
+        ? 1
+        : Math.Max(1, (int)Math.Ceiling(_pageResult.TotalCount / (double)_pageSize));
+
+    private int AuditTotalPages => _auditResult is null || _auditResult.TotalCount == 0
+        ? 1
+        : Math.Max(1, (int)Math.Ceiling(_auditResult.TotalCount / 20.0));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        _from = today;
+        _to = today;
+
+        if (IsAdmin)
+        {
+            var staff = await Sales.GetStaffForFilterAsync();
+            if (staff is not null)
+            {
+                _staff.Clear();
+                _staff.AddRange(staff);
+            }
+        }
+
+        await ApplyFiltersAsync();
+    }
+
+    private void OnSellerFilterChange(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        if (string.IsNullOrEmpty(v))
+            _filterSellerId = null;
+        else if (int.TryParse(v, CultureInfo.InvariantCulture, out var id))
+            _filterSellerId = id;
+    }
+
+    private async Task ApplyFiltersAsync()
+    {
+        if (IsAdmin && _from > _to)
+        {
+            _error = "From date cannot be after To date.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _error = null;
+        _loading = true;
+        _page = 1;
+        _expanded.Clear();
+        _details.Clear();
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var seller = IsAdmin ? _filterSellerId : null;
+            var summaryTask = Sales.GetSalesSummaryAsync(_from, _to, seller);
+            var historyTask = Sales.GetSalesHistoryAsync(_from, _to, seller, _page, _pageSize);
+            await Task.WhenAll(summaryTask, historyTask);
+            _summary = await summaryTask;
+            _pageResult = await historyTask;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _summary = null;
+            _pageResult = null;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadPageAsync()
+    {
+        _error = null;
+        _loading = true;
+        _expanded.Clear();
+        _details.Clear();
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var seller = IsAdmin ? _filterSellerId : null;
+            _pageResult = await Sales.GetSalesHistoryAsync(_from, _to, seller, _page, _pageSize);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task PrevPageAsync()
+    {
+        if (_page <= 1) return;
+        _page--;
+        await LoadPageAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        await LoadPageAsync();
+    }
+
+    private async Task ToggleDetailAsync(int saleId)
+    {
+        if (!_expanded.Remove(saleId))
+        {
+            _expanded.Add(saleId);
+            await InvokeAsync(StateHasChanged);
+            if (!_details.ContainsKey(saleId))
+            {
+                var d = await Sales.GetSaleDetailAsync(saleId);
+                if (d is null)
+                {
+                    _error = "Could not load sale lines.";
+                    Toasts.Error(_error);
+                    _expanded.Remove(saleId);
+                }
+                else
+                    _details[saleId] = d;
+            }
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetTabAsync(string tab)
+    {
+        _tab = tab;
+        if (tab == "stats")
+        {
+            if (_statsPreset != "custom")
+                await OnStatsPresetChangedAsync();
+            else
+                await LoadStatisticsAsync();
+        }
+        else if (tab == "audit")
+            await LoadAuditAsync(resetPage: true);
+    }
+
+    private void OpenRefundModal()
+    {
+        _refundPrefill = null;
+        _refundOpen = true;
+    }
+
+    private void OpenRefundForRow(string receiptNumber)
+    {
+        _refundPrefill = receiptNumber;
+        _refundOpen = true;
+    }
+
+    private Task CloseRefundModal()
+    {
+        _refundOpen = false;
+        _refundPrefill = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnRefundCompletedAsync()
+    {
+        _refundOpen = false;
+        _refundPrefill = null;
+        await ApplyFiltersAsync();
+        if (_tab == "stats")
+            await LoadStatisticsAsync();
+        if (_tab == "audit")
+            await LoadAuditAsync();
+    }
+
+    private async Task OnStatsPresetChangedAsync()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        switch (_statsPreset)
+        {
+            case "today":
+                _from = _to = today;
+                break;
+            case "week":
+                _from = today.AddDays(-(int)today.DayOfWeek);
+                _to = today;
+                break;
+            case "month":
+                _from = new DateOnly(today.Year, today.Month, 1);
+                _to = today;
+                break;
+            default:
+                return;
+        }
+
+        await LoadStatisticsAsync();
+    }
+
+    private async Task LoadStatisticsAsync()
+    {
+        if (!IsAdmin) return;
+        _statsLoading = true;
+        _statsError = null;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            _stats = await Refunds.GetStatisticsAsync(_from, _to);
+            if (_stats is null)
+            {
+                _statsError = "Statistics unavailable.";
+                _statsDailyRows.Clear();
+                return;
+            }
+
+            RebuildStatsDailyRows();
+        }
+        catch (Exception ex)
+        {
+            _statsError = ex.Message;
+            _stats = null;
+            _statsDailyRows.Clear();
+        }
+        finally
+        {
+            _statsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void RebuildStatsDailyRows()
+    {
+        _statsDailyRows.Clear();
+        if (_stats is null)
+            return;
+
+        var salesByDay = _stats.SalesPerDay.ToDictionary(d => d.Date);
+        var refundsByDay = _stats.RefundsPerDay.ToDictionary(d => d.Date);
+        var profitByDay = _stats.ProfitPerDay.ToDictionary(d => d.Date);
+        var days = salesByDay.Keys.Union(refundsByDay.Keys).Union(profitByDay.Keys).OrderBy(d => d);
+        foreach (var day in days)
+        {
+            salesByDay.TryGetValue(day, out var sale);
+            refundsByDay.TryGetValue(day, out var refund);
+            profitByDay.TryGetValue(day, out var profit);
+            _statsDailyRows.Add(new StatsDailyRow(
+                day,
+                sale?.Amount ?? 0,
+                sale?.Count ?? 0,
+                refund?.Amount ?? 0,
+                refund?.Count ?? 0,
+                profit?.Amount ?? 0));
+        }
+    }
+
+    private sealed record StatsDailyRow(
+        DateOnly Date,
+        decimal SalesAmount,
+        int SalesCount,
+        decimal RefundAmount,
+        int RefundCount,
+        decimal ProfitAmount);
+
+    private SaleEventType? ParseAuditType() =>
+        string.IsNullOrWhiteSpace(_auditEventTypeRaw)
+            ? null
+            : Enum.TryParse<SaleEventType>(_auditEventTypeRaw, out var t) ? t : null;
+
+    private Task ApplyAuditFiltersAsync() => LoadAuditAsync(resetPage: true);
+
+    private async Task LoadAuditAsync(bool resetPage = false)
+    {
+        if (!IsAdmin) return;
+        if (_from > _to)
+        {
+            _auditError = "From date cannot be after To date.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (resetPage)
+            _auditPage = 1;
+
+        _auditLoading = true;
+        _auditError = null;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            _auditResult = await Refunds.GetEventsAsync(_from, _to, ParseAuditType(),
+                string.IsNullOrWhiteSpace(_auditPerformedBy) ? null : _auditPerformedBy.Trim(),
+                _auditPage, 20);
+            if (_auditResult is null)
+                _auditError = "Audit log unavailable.";
+        }
+        catch (Exception ex)
+        {
+            _auditError = ex.Message;
+            _auditResult = null;
+        }
+        finally
+        {
+            _auditLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ToggleAuditExpand(int eventId)
+    {
+        if (!_auditExpanded.Remove(eventId))
+            _auditExpanded.Add(eventId);
+    }
+
+    private async Task AuditPrevAsync()
+    {
+        if (_auditPage <= 1) return;
+        _auditPage--;
+        await LoadAuditAsync();
+    }
+
+    private async Task AuditNextAsync()
+    {
+        if (_auditPage >= AuditTotalPages) return;
+        _auditPage++;
+        await LoadAuditAsync();
+    }
+
+    private async Task ExportAuditAsync()
+    {
+        if (!IsAdmin) return;
+        _loading = true;
+        try
+        {
+            var (bytes, err) = await Refunds.ExportEventsCsvAsync(_from, _to, ParseAuditType(),
+                string.IsNullOrWhiteSpace(_auditPerformedBy) ? null : _auditPerformedBy.Trim());
+            if (bytes is null)
+            {
+                Toasts.Error(err ?? "Export failed");
+                return;
+            }
+
+            var fname = $"sale-events-{_from:yyyyMMdd}-{_to:yyyyMMdd}.csv";
+            await Js.InvokeAsync<bool>("storeDownloadFile", fname, Convert.ToBase64String(bytes), "text/csv;charset=utf-8");
+            Toasts.Success("Audit log exported");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!IsAdmin) return;
+        _error = null;
+        _loading = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var (bytes, err) = await Sales.ExportSalesCsvAsync(_from, _to, _filterSellerId);
+            if (bytes is null || !string.IsNullOrEmpty(err))
+            {
+                _error = err ?? "Export failed.";
+                Toasts.Error(_error);
+                return;
+            }
+
+            var fname = $"sales-export-{_from:yyyyMMdd}-{_to:yyyyMMdd}.csv";
+            var b64 = Convert.ToBase64String(bytes);
+            var ok = await Js.InvokeAsync<bool>("storeDownloadFile", fname, b64, "text/csv;charset=utf-8");
+            if (!ok)
+            {
+                _error = "Download did not start (check browser / WebView).";
+                Toasts.Error(_error);
+            }
+            else
+            {
+                Toasts.Success("Export downloaded");
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+}

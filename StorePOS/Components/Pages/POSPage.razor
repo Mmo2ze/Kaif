@@ -1,0 +1,689 @@
+@page "/pos"
+@layout MainLayout
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@using StoreShared
+@using StoreShared.Catalog
+@inject ProductService Products
+@inject SaleService Sales
+@inject AppState App
+@inject StoreSettingsService StoreSettings
+@inject IReceiptPrintService ReceiptPrinter
+@inject IJSRuntime Js
+
+<PageTitle>POS</PageTitle>
+
+<div class="pos-page">
+    @if (_flashError is not null)
+    {
+        <div class="pos-flash-error" role="alert">@_flashError</div>
+    }
+    @if (_refreshingStock)
+    {
+        <p class="muted pos-stock-refresh-hint" role="status">Updating stock…</p>
+    }
+
+    <div class="pos-shell">
+        <section class="pos-cart-col" aria-label="Cart">
+            <h2 class="pos-panel-title">Cart</h2>
+            @if (_cart.Count == 0)
+            {
+                <p class="pos-empty-cart muted">Scan a barcode to start</p>
+            }
+            else
+            {
+                <div class="pos-cart-table-wrap">
+                    <table class="pos-cart-table">
+                        <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Size</th>
+                            <th class="col-narrow">Qty</th>
+                            <th class="col-price">Unit</th>
+                            <th class="col-price">Line</th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var line in _cart)
+                        {
+                            <tr>
+                                <td>@line.ProductName</td>
+                                <td>@line.Size</td>
+                                <td class="col-narrow">
+                                    <input type="number" class="input pos-qty-input touch-input"
+                                           min="1"
+                                           max="@line.MaxStock"
+                                           value="@line.Qty"
+                                           @onchange="e => OnQtyChange(line, e)" />
+                                </td>
+                                <td class="col-price">@MoneyFormat.Format(line.UnitPrice, StoreSettings.CurrencyLabel)</td>
+                                <td class="col-price">@MoneyFormat.Format(line.LineTotal, StoreSettings.CurrencyLabel)</td>
+                                <td>
+                                    <button type="button" class="btn-link touch-target" @onclick="() => RemoveLine(line)">Remove</button>
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                        <tfoot>
+                        <tr class="pos-subtotal-row">
+                            <td colspan="4" class="text-right"><strong>Subtotal</strong></td>
+                            <td class="col-price"><strong>@MoneyFormat.Format(CartSubtotal, StoreSettings.CurrencyLabel)</strong></td>
+                            <td></td>
+                        </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="pos-controls-col" aria-label="Checkout">
+            <h2 class="pos-panel-title">Scan</h2>
+            <div class="field">
+                <label for="pos-barcode-input">Barcode</label>
+                <p class="muted small pos-hotkey-hint">F2 focus · F12 checkout · Esc clear cart · F5 refresh stock</p>
+                <input id="pos-barcode-input"
+                       @ref="_barcodeInput"
+                       class="input touch-input pos-barcode-input"
+                       @bind="_barcode"
+                       @bind:event="oninput"
+                       @onkeydown="OnBarcodeKeyDownAsync"
+                       autocomplete="off"
+                       placeholder="Scan or type, then Enter" />
+            </div>
+
+            <h3 class="pos-subheading">Discount</h3>
+            @if (!DiscountUiEnabled && IsSeller)
+            {
+                <p class="muted pos-discount-hint">Discounts need a manager PIN.</p>
+                <button type="button" class="btn secondary full-width touch-target" @onclick="() => _showPinModal = true">Enter manager PIN</button>
+            }
+            else
+            {
+                <div class="pos-discount-type">
+                    <label class="pos-radio">
+                        <input type="radio" name="disc" checked="@_discountFlat" @onchange="@(_ => SetDiscountMode(true))" />
+                        Flat (@StoreSettings.CurrencyLabel)
+                    </label>
+                    <label class="pos-radio">
+                        <input type="radio" name="disc" checked="@(!_discountFlat)" @onchange="@(_ => SetDiscountMode(false))" />
+                        Percentage (%)
+                    </label>
+                </div>
+                <div class="field">
+                    <label for="disc-val">@(_discountFlat ? $"Amount ({StoreSettings.CurrencyLabel})" : "Percent")</label>
+                    <input id="disc-val"
+                           type="number"
+                           step="0.01"
+                           min="0"
+                           class="input touch-input"
+                           @bind="_discountRaw"
+                           @bind:event="oninput"
+                           disabled="@(!DiscountUiEnabled)" />
+                </div>
+            }
+
+            <div class="pos-summary">
+                <div class="pos-summary-row"><span>Subtotal</span><span>@MoneyFormat.Format(CartSubtotal, StoreSettings.CurrencyLabel)</span></div>
+                <div class="pos-summary-row discount"><span>Discount</span><span>- @MoneyFormat.Format(DiscountAmount, StoreSettings.CurrencyLabel)</span></div>
+                <div class="pos-summary-divider"></div>
+                <div class="pos-summary-row total"><span>TOTAL</span><span>@MoneyFormat.Format(Total, StoreSettings.CurrencyLabel)</span></div>
+            </div>
+
+            <button type="button" class="btn checkout-btn touch-target" disabled="@(_cart.Count == 0 || _checkoutBusy)" @onclick="CheckoutAsync">
+                @if (_checkoutBusy)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span><span>Processing…</span>
+                }
+                else
+                {
+                    <span>Checkout</span>
+                }
+            </button>
+            <button type="button" class="btn secondary full-width touch-target pos-clear-btn" disabled="@(_cart.Count == 0)" @onclick="ClearCartAsync">
+                Clear cart
+            </button>
+        </aside>
+    </div>
+</div>
+
+@if (_showPinModal)
+{
+    <div class="pos-modal-backdrop" @onclick="ClosePinModal">
+        <div class="pos-modal" @onclick:stopPropagation="true">
+            <h3>Manager PIN</h3>
+            <p class="muted">Required to apply a discount.</p>
+            <input type="password" class="input touch-input pin-input-full" @bind="_pinValue" @bind:event="oninput" placeholder="PIN" />
+            @if (_pinError is not null)
+            {
+                <p class="error">@_pinError</p>
+            }
+            <div class="pos-modal-actions">
+                <button type="button" class="btn secondary touch-target" @onclick="ClosePinModal">Cancel</button>
+                <button type="button" class="btn primary touch-target" @onclick="SubmitPinAsync" disabled="@_pinBusy">@(_pinBusy ? "…" : "Unlock")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_receipt is not null)
+{
+    <div class="pos-modal-backdrop">
+        <div class="pos-modal pos-receipt-modal">
+            <div id="receipt-print-area" class="receipt-printable">
+                <div class="receipt-header">
+                    <strong>@StoreSettings.StoreName</strong>
+                    <div class="muted receipt-meta">@_receipt.When.ToLocalTime().ToString("g")</div>
+                    <div class="muted">Cashier: @_receipt.Cashier</div>
+                    <div class="muted">Sale #@_receipt.SaleId</div>
+                </div>
+                <table class="receipt-lines">
+                    <tbody>
+                    @foreach (var line in _receipt.Lines)
+                    {
+                        <tr>
+                            <td>
+                                <div>@line.ProductName <span class="muted">(@line.Size)</span></div>
+                                <div class="muted small">@line.Qty × @MoneyFormat.Format(line.UnitPrice, StoreSettings.CurrencyLabel)</div>
+                            </td>
+                            <td class="receipt-line-total">@MoneyFormat.Format(line.LineTotal, StoreSettings.CurrencyLabel)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+                @if (_receipt.Discount > 0)
+                {
+                    <div class="receipt-summary-row"><span>Discount</span><span>- @MoneyFormat.Format(_receipt.Discount, StoreSettings.CurrencyLabel)</span></div>
+                }
+                <div class="receipt-summary-row total"><span>Total</span><span>@MoneyFormat.Format(_receipt.Total, StoreSettings.CurrencyLabel)</span></div>
+            </div>
+            <div class="pos-modal-actions receipt-actions no-print">
+                <button type="button" class="btn secondary touch-target" @onclick="PrintReceiptAsync">Print</button>
+                <button type="button" class="btn primary touch-target" @onclick="NewSaleAfterReceipt">New Sale</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly List<CartLine> _cart = new();
+    private string _barcode = "";
+    private string? _flashError;
+    private ElementReference _barcodeInput;
+    private DotNetObjectReference<POSPage>? _dotNetRef;
+
+    private bool _discountFlat = true;
+    private string _discountRaw = "";
+
+    private bool _allowSellerDiscount;
+    private bool _discountUnlocked;
+    private string? _discountAuthToken;
+
+    private bool _showPinModal;
+    private string _pinValue = "";
+    private string? _pinError;
+    private bool _pinBusy;
+
+    private bool _checkoutBusy;
+    private bool _refreshingStock;
+    private ReceiptSnapshot? _receipt;
+
+    private bool IsAdmin => string.Equals(App.Role, nameof(UserRole.Admin), StringComparison.OrdinalIgnoreCase);
+    private bool IsSeller => string.Equals(App.Role, nameof(UserRole.Seller), StringComparison.OrdinalIgnoreCase);
+
+    private bool DiscountUiEnabled => IsAdmin || _allowSellerDiscount || _discountUnlocked;
+
+    private decimal CartSubtotal => _cart.Sum(l => l.LineTotal);
+
+    private decimal DiscountAmount
+    {
+        get
+        {
+            if (!DiscountUiEnabled && IsSeller) return 0;
+            if (!decimal.TryParse(_discountRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.CurrentCulture, out var v))
+                v = 0;
+            if (v <= 0) return 0;
+            var sub = CartSubtotal;
+            if (_discountFlat)
+                return Math.Min(v, sub);
+            var pct = Math.Min(v, 100);
+            return Math.Round(sub * (pct / 100m), 2, MidpointRounding.AwayFromZero);
+        }
+    }
+
+    private decimal Total => Math.Max(0, CartSubtotal - DiscountAmount);
+
+    protected override void OnInitialized()
+    {
+        StoreSettings.Changed += OnStoreSettingsChanged;
+    }
+
+    private void OnStoreSettingsChanged()
+    {
+        _allowSellerDiscount = StoreSettings.AllowSellerDiscount;
+        if (IsAdmin || _allowSellerDiscount)
+            _discountUnlocked = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        _allowSellerDiscount = StoreSettings.AllowSellerDiscount;
+        if (IsAdmin || _allowSellerDiscount)
+            _discountUnlocked = true;
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        try
+        {
+            await _barcodeInput.FocusAsync();
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("initStorePosBarcodeWedge", _dotNetRef, "#pos-barcode-input");
+            await Js.InvokeVoidAsync("initStorePosPosHotkeys", _dotNetRef);
+        }
+        catch
+        {
+            // Host may delay interop.
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnWedgeBarcode(string code)
+    {
+        _barcode = code ?? "";
+        await InvokeAsync(StateHasChanged);
+        await TryAddBarcodeAsync(_barcode);
+        await FocusBarcodeAsync();
+    }
+
+    private async Task OnBarcodeKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter")
+            return;
+        await TryAddBarcodeAsync(_barcode);
+        await FocusBarcodeAsync();
+    }
+
+    private async Task TryAddBarcodeAsync(string raw)
+    {
+        var key = (raw ?? "").Trim();
+        _flashError = null;
+        if (string.IsNullOrEmpty(key))
+            return;
+
+        var (sku, err) = await Products.GetSkuByBarcodeAsync(key);
+        if (err is not null)
+        {
+            if (err.Contains("No SKU", StringComparison.OrdinalIgnoreCase) || err.Contains("404", StringComparison.Ordinal))
+                await RejectScanAsync("Barcode not recognised");
+            else
+                await RejectScanAsync(err);
+            return;
+        }
+
+        if (sku is null)
+        {
+            await RejectScanAsync("Barcode not recognised");
+            return;
+        }
+
+        if (sku.Stock <= 0)
+        {
+            await RejectScanAsync("Out of stock");
+            return;
+        }
+
+        var existing = _cart.FirstOrDefault(l => l.SkuId == sku.Id);
+        if (existing is not null)
+        {
+            if (existing.Qty >= existing.MaxStock)
+            {
+                await RejectScanAsync("Out of stock");
+                return;
+            }
+
+            existing.Qty++;
+        }
+        else
+        {
+            _cart.Add(new CartLine
+            {
+                SkuId = sku.Id,
+                ProductName = sku.ProductName ?? "Product",
+                Size = sku.Size,
+                Barcode = sku.Barcode,
+                Qty = 1,
+                UnitPrice = Pricing.Effective(sku.UnitPrice, sku.SalePrice),
+                MaxStock = sku.Stock,
+            });
+        }
+
+        _barcode = "";
+        StateHasChanged();
+        await FocusBarcodeAsync();
+    }
+
+    private async Task RefreshCartStockAsync()
+    {
+        if (_cart.Count == 0 || _refreshingStock)
+            return;
+
+        _refreshingStock = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            foreach (var line in _cart)
+            {
+                var (fresh, _) = await Products.GetSkuByBarcodeAsync(line.Barcode);
+                if (fresh is null)
+                    continue;
+                line.MaxStock = fresh.Stock;
+                line.UnitPrice = Pricing.Effective(fresh.UnitPrice, fresh.SalePrice);
+                if (line.Qty > line.MaxStock)
+                    line.Qty = Math.Max(1, line.MaxStock);
+            }
+
+            _cart.RemoveAll(l => l.MaxStock <= 0);
+        }
+        finally
+        {
+            _refreshingStock = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    [JSInvokable]
+    public Task PosHotkeyFocusBarcode() => FocusBarcodeAsync();
+
+    [JSInvokable]
+    public async Task PosHotkeyCheckout()
+    {
+        if (_showPinModal || _receipt is not null || _cart.Count == 0 || _checkoutBusy)
+            return;
+        await CheckoutAsync();
+    }
+
+    [JSInvokable]
+    public async Task PosHotkeyClearCart()
+    {
+        if (_checkoutBusy)
+            return;
+        if (_showPinModal)
+        {
+            ClosePinModal();
+            return;
+        }
+
+        if (_receipt is not null)
+        {
+            await NewSaleAfterReceipt();
+            return;
+        }
+
+        await ClearCartAsync();
+    }
+
+    [JSInvokable]
+    public Task PosHotkeyRefreshStock() => RefreshCartStockAsync();
+
+    private void OnQtyChange(CartLine line, ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var q) || q < 1)
+            q = 1;
+        q = Math.Min(q, line.MaxStock);
+        line.Qty = q;
+        StateHasChanged();
+    }
+
+    private void RemoveLine(CartLine line)
+    {
+        _cart.Remove(line);
+    }
+
+    private void SetDiscountMode(bool flat)
+    {
+        if (_discountFlat == flat) return;
+        _discountFlat = flat;
+        StateHasChanged();
+    }
+
+    private void ClosePinModal()
+    {
+        _showPinModal = false;
+        _pinValue = "";
+        _pinError = null;
+    }
+
+    private async Task SubmitPinAsync()
+    {
+        _pinError = null;
+        _pinBusy = true;
+        try
+        {
+            var token = await Sales.AuthorizeDiscountAsync(_pinValue);
+            if (string.IsNullOrEmpty(token))
+            {
+                _pinError = "Invalid PIN.";
+                return;
+            }
+
+            _discountAuthToken = token;
+            _discountUnlocked = true;
+            ClosePinModal();
+        }
+        finally
+        {
+            _pinBusy = false;
+        }
+    }
+
+    private async Task CheckoutAsync()
+    {
+        if (_cart.Count == 0) return;
+
+        if (DiscountAmount > 0 && IsSeller && !_allowSellerDiscount)
+        {
+            if (string.IsNullOrEmpty(_discountAuthToken))
+            {
+                _showPinModal = true;
+                return;
+            }
+        }
+
+        var total = Total;
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", $"Charge customer {MoneyFormat.Format(total, StoreSettings.CurrencyLabel)}?");
+        if (!ok) return;
+
+        _checkoutBusy = true;
+        try
+        {
+            var items = _cart.Select(l => new SaleLineRequest(l.SkuId, l.Qty, l.UnitPrice)).ToList();
+            var disc = DiscountAmount;
+            string? authTok = null;
+            if (disc > 0 && IsSeller && !_allowSellerDiscount)
+                authTok = _discountAuthToken;
+
+            var req = new CreateSaleRequest(items, disc, authTok);
+            var (result, error) = await Sales.CreateSaleAsync(req);
+            if (result is null)
+            {
+                await FlashErrorAsync(error ?? "Checkout failed.");
+                return;
+            }
+
+            _receipt = new ReceiptSnapshot(
+                result.SaleId,
+                result.ReceiptNumber,
+                DateTimeOffset.UtcNow,
+                App.Username,
+                _cart.Select(l => new CartLine
+                {
+                    SkuId = l.SkuId,
+                    ProductName = l.ProductName,
+                    Size = l.Size,
+                    Barcode = l.Barcode,
+                    Qty = l.Qty,
+                    UnitPrice = l.UnitPrice,
+                    MaxStock = l.MaxStock,
+                }).ToList(),
+                CartSubtotal,
+                disc,
+                result.TotalAmount);
+
+            ResetCartAfterSale();
+        }
+        finally
+        {
+            _checkoutBusy = false;
+        }
+    }
+
+    private void ResetCartAfterSale()
+    {
+        _cart.Clear();
+        _barcode = "";
+        _discountRaw = "";
+        _discountAuthToken = null;
+        if (IsSeller && !_allowSellerDiscount)
+            _discountUnlocked = false;
+    }
+
+    private async Task ClearCartAsync()
+    {
+        if (_cart.Count == 0) return;
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", "Clear all items from the cart?");
+        if (!ok) return;
+        _cart.Clear();
+        _barcode = "";
+        _discountRaw = "";
+        _discountAuthToken = null;
+        if (IsSeller && !_allowSellerDiscount)
+            _discountUnlocked = false;
+    }
+
+    private async Task PrintReceiptAsync()
+    {
+        if (_receipt is null)
+            return;
+
+        if (ReceiptPrinter.IsSupported && !string.IsNullOrWhiteSpace(ReceiptPrinter.GetSelectedPrinter()))
+        {
+            var dto = ReceiptPrintHelper.FromSale(
+                _receipt.SaleId,
+                _receipt.When,
+                StoreSettings.StoreName,
+                storeAddress: null,
+                StoreSettings.ReceiptLandline,
+                StoreSettings.ReceiptPhone,
+                _receipt.Lines.Select(l => new ReceiptPrintHelper.ReceiptLineInput(
+                    l.ProductName,
+                    l.Size.ToString(),
+                    l.Qty,
+                    l.UnitPrice,
+                    l.LineTotal)),
+                _receipt.Subtotal,
+                _receipt.Discount,
+                _receipt.Total,
+                _receipt.ReceiptNumber);
+
+            if (ReceiptPrinter.PrintReceipt(dto, _receipt.Cashier))
+                return;
+        }
+
+        try
+        {
+            await Js.InvokeVoidAsync("storePosPrint");
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async Task NewSaleAfterReceipt()
+    {
+        _receipt = null;
+        await FocusBarcodeAsync();
+    }
+
+    private async Task FocusBarcodeAsync()
+    {
+        try
+        {
+            await _barcodeInput.FocusAsync();
+        }
+        catch
+        {
+            //
+        }
+    }
+
+    private async Task RejectScanAsync(string message)
+    {
+        _barcode = "";
+        if (string.Equals(_flashError, message, StringComparison.Ordinal))
+        {
+            await FocusBarcodeAsync();
+            return;
+        }
+
+        _flashError = message;
+        await InvokeAsync(StateHasChanged);
+        await FocusBarcodeAsync();
+        await Task.Delay(2000);
+        _flashError = null;
+        await InvokeAsync(StateHasChanged);
+        await FocusBarcodeAsync();
+    }
+
+    private async Task FlashErrorAsync(string message)
+    {
+        _flashError = message;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(2600);
+        _flashError = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        StoreSettings.Changed -= OnStoreSettingsChanged;
+        try
+        {
+            _ = Js.InvokeVoidAsync("disposeStorePosPosHotkeys");
+        }
+        catch
+        {
+            //
+        }
+
+        _dotNetRef?.Dispose();
+    }
+
+    private sealed class CartLine
+    {
+        public int SkuId { get; set; }
+        public string ProductName { get; set; } = "";
+        public ClothingSize Size { get; set; }
+        public string Barcode { get; set; } = "";
+        public int Qty { get; set; }
+        public decimal UnitPrice { get; set; }
+        public int MaxStock { get; set; }
+        public decimal LineTotal => UnitPrice * Qty;
+    }
+
+    private sealed record ReceiptSnapshot(
+        int SaleId,
+        string ReceiptNumber,
+        DateTimeOffset When,
+        string Cashier,
+        IReadOnlyList<CartLine> Lines,
+        decimal Subtotal,
+        decimal Discount,
+        decimal Total);
+}

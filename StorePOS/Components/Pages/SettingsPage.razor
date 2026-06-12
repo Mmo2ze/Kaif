@@ -1,0 +1,1017 @@
+@page "/settings"
+@layout MainLayout
+@attribute [AdminRoute]
+@implements IDisposable
+@using System.Net
+@using System.Net.Http
+@using System.Net.Http.Headers
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Net.Sockets
+@using StorePOS.Services
+@using StoreShared.Pos
+@using StoreShared.Backup
+@using StoreShared.Catalog
+@using StoreShared.Barcode
+@using StoreShared.Stock
+@using StoreShared.Receipt
+@inject HttpClient Http
+@inject StoreSettingsService StoreSettings
+@inject ToastService Toasts
+@inject IJSRuntime Js
+@inject IBarcodePrintService BarcodePrinter
+@inject BarcodePrintHelper BarcodePrint
+@inject IReceiptPrintService ReceiptPrinter
+@inject ReceiptLogoStore ReceiptLogo
+@inject AppState App
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Store settings</h1>
+<p class="muted">Branding, currency label, stock warnings, and seller discount policy. Saved to the server database.</p>
+
+<div class="field settings-lan-block">
+    <label>Web dashboard (LAN)</label>
+    @if (_lanDashboardUrl is not null)
+    {
+        <p class="mono settings-lan-url">Web dashboard available at: <strong>@_lanDashboardUrl</strong></p>
+        <div class="settings-lan-actions">
+            <button type="button" class="btn secondary touch-target" @onclick="CopyDashboardUrlAsync">Copy link</button>
+            @if (_copyFeedback)
+            {
+                <span class="muted small">Copied to clipboard.</span>
+            }
+        </div>
+    }
+    else
+    {
+        <p class="muted">Could not detect a LAN IPv4 address on this PC.</p>
+    }
+</div>
+
+@if (_error is not null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+@if (_success)
+{
+    <p class="muted" role="status">Settings saved.</p>
+}
+
+<div class="settings-form">
+    <div class="field">
+        <label for="set-store">Store name</label>
+        <input id="set-store" class="input touch-input" @bind="_model.StoreName" @bind:event="oninput" maxlength="256" />
+        <span class="muted small">Shown on receipts and in the app header.</span>
+    </div>
+    <div class="field">
+        <label for="set-curr">Currency label</label>
+        <input id="set-curr" class="input touch-input" @bind="_model.CurrencyLabel" @bind:event="oninput" maxlength="32" />
+    </div>
+    <div class="field">
+        <label for="set-landline">Receipt landline</label>
+        <input id="set-landline" class="input touch-input" @bind="_model.ReceiptLandline" @bind:event="oninput" maxlength="64" placeholder="e.g. 02-12345678" />
+        <span class="muted small">Printed on sale and refund receipts (centered footer).</span>
+    </div>
+    <div class="field">
+        <label for="set-phone">Receipt phone</label>
+        <input id="set-phone" class="input touch-input" @bind="_model.ReceiptPhone" @bind:event="oninput" maxlength="64" placeholder="e.g. 01001234567" />
+    </div>
+    <div class="field">
+        <label for="set-low">Low stock threshold</label>
+        <input id="set-low" type="number" min="0" class="input touch-input" @bind="_model.LowStockThreshold" @bind:event="oninput" />
+        <span class="muted small">Stock rows use an amber highlight when quantity is below this (and not zero).</span>
+    </div>
+    <div class="field">
+        <label class="touch-target">
+            <input type="checkbox" @bind="_model.AllowSellerDiscount" />
+            Allow sellers to apply discount without manager PIN
+        </label>
+    </div>
+    <div class="modal-actions" style="margin-top:1rem;">
+        <button type="button" class="btn primary touch-target" disabled="@_busy" @onclick="SaveAsync">
+            @if (_busy)
+            {
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+            }
+            @(_busy ? "Saving…" : "Save")
+        </button>
+    </div>
+</div>
+
+<h2 class="settings-section-title" style="margin-top:2rem;">Barcode printer</h2>
+<p class="muted">Saved on this PC only. When set, barcode prints from Stock and Products go directly to that printer — no print dialog.</p>
+
+@if (!BarcodePrinter.IsSupported)
+{
+    <p class="muted">Direct barcode label printing is available on Windows. On macOS, labels open in the browser print dialog.</p>
+}
+else if (_printers.Count == 0)
+{
+    <p class="error" role="alert">No printers were found on this PC. Install a printer in Windows, then reopen Settings.</p>
+}
+else
+{
+    <div class="settings-form">
+        <div class="field">
+            <label for="barcode-printer">Default barcode printer</label>
+            <select id="barcode-printer" class="input touch-input" @bind="_selectedBarcodePrinter" @bind:after="OnBarcodePrinterChanged">
+                <option value="">Ask every time (print dialog)</option>
+                @foreach (var name in _printers)
+                {
+                    <option value="@name">@name</option>
+                }
+            </select>
+            <span class="muted small">XP-410B: in Windows open <strong>Printer properties → Printing preferences</strong> and set the same label size as below (default <strong>35×25 mm</strong>). A mismatch feeds a blank label, then half a barcode.</span>
+            @if (!string.IsNullOrWhiteSpace(_driverPaperSummary))
+            {
+                <span class="muted small">Windows driver paper now: <strong>@_driverPaperSummary</strong></span>
+            }
+        </div>
+        <div class="field">
+            <label for="label-width-mm">Label width (mm)</label>
+            <input id="label-width-mm" type="number" class="input touch-input" min="20" max="108" @bind="_labelWidthMm" />
+        </div>
+        <div class="field">
+            <label for="label-height-mm">Label height (mm)</label>
+            <input id="label-height-mm" type="number" class="input touch-input" min="15" max="150" @bind="_labelHeightMm" />
+            <span class="muted small">Must match your physical stickers. Click Save printer, then Test print.</span>
+        </div>
+
+        <h3 class="settings-section-title" style="margin-top:1.25rem; font-size:1rem;">Label space &amp; calibration</h3>
+        <p class="muted small">Corner marks show the printable area. Save preview to see the exact bitmap file sent to the printer.</p>
+        @if (_labelJobInfo is not null)
+        {
+            <p class="muted small mono" role="status">Printer receives: @_labelJobInfo.Summary</p>
+        }
+        @if (!string.IsNullOrEmpty(_calibrationPreviewBase64))
+        {
+            <div class="label-calibration-preview" style="margin:0.5rem 0;">
+                <img src="@($"data:image/png;base64,{_calibrationPreviewBase64}")" alt="Label raster preview" style="max-width:100%; border:1px solid var(--border, #ccc);" />
+                <span class="muted small">On-screen preview (same pixels as print)</span>
+            </div>
+        }
+        <div class="field">
+            <label for="calibration-count">Corner-frame labels to print</label>
+            <input id="calibration-count" type="number" class="input touch-input" min="1" max="50" @bind="_calibrationCount" />
+        </div>
+        <div class="modal-actions" style="margin-top:0.5rem; flex-wrap:wrap; gap:0.5rem;">
+            <button type="button" class="btn secondary touch-target" disabled="@_testPrintBusy" @onclick="RefreshCalibrationPreviewAsync">Refresh preview</button>
+            <button type="button" class="btn secondary touch-target" disabled="@_testPrintBusy" @onclick="SaveCalibrationPreviewAsync">Save preview to disk</button>
+            <button type="button" class="btn secondary touch-target" disabled="@(_testPrintBusy || string.IsNullOrWhiteSpace(_selectedBarcodePrinter))" @onclick="PrintCalibrationFrameAsync">
+                Print corner frames (@_calibrationCount)
+            </button>
+        </div>
+
+        <div class="modal-actions" style="margin-top:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+            <button type="button" class="btn primary touch-target" @onclick="SaveBarcodePrinterAsync">Save printer</button>
+            <button type="button" class="btn secondary touch-target" disabled="@(_testPrintBusy || string.IsNullOrWhiteSpace(_selectedBarcodePrinter))" @onclick="TestBarcodePrinterAsync">
+                @if (_testPrintBusy)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                Test print
+            </button>
+            <button type="button" class="btn secondary touch-target" disabled="@_testPrintBusy" @onclick="TestEan8PrintAsync" title="Print a short EAN-8 sample (wider bars) to verify your scanner">
+                @if (_testPrintBusy)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                Print EAN-8 test
+            </button>
+        </div>
+        <p class="muted small">All product barcodes are EAN-8 (8 digits from SKU id). Test label: <span class="mono">@SkuBarcode.WithCheckDigit(SkuBarcode.TestArticle7)</span>. Reprint any labels that still show old codes.</p>
+        @if (!string.IsNullOrWhiteSpace(_barcodePrinterStatus))
+        {
+            <p class="muted small" role="status">@_barcodePrinterStatus</p>
+        }
+    </div>
+}
+
+<h2 class="settings-section-title" style="margin-top:2rem;">Receipt printer (80 mm)</h2>
+<p class="muted">ESC/POS thermal receipt (Epson/Star compatible). Saved on this PC only. When set, POS Print uses raw bytes — no browser print dialog.</p>
+
+@if (!ReceiptPrinter.IsSupported)
+{
+    <p class="muted">Direct thermal receipt printing is available on Windows. On macOS, POS uses the browser print dialog.</p>
+}
+else if (_receiptPrinters.Count == 0)
+{
+    <p class="error" role="alert">No printers were found on this PC.</p>
+}
+else
+{
+    <div class="settings-form">
+        <div class="field">
+            <label for="receipt-printer">Default receipt printer</label>
+            <select id="receipt-printer" class="input touch-input" @bind="_selectedReceiptPrinter">
+                <option value="">Use browser print dialog (POS)</option>
+                @foreach (var name in _receiptPrinters)
+                {
+                    <option value="@name">@name</option>
+                }
+            </select>
+            <span class="muted small">80 mm roll, partial cut. Driver should be set to ESC/POS or generic text — not “Microsoft Print to PDF”.</span>
+        </div>
+        <div class="modal-actions" style="margin-top:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+            <button type="button" class="btn primary touch-target" @onclick="SaveReceiptPrinterAsync">Save receipt printer</button>
+            <button type="button" class="btn secondary touch-target" disabled="@(_receiptTestBusy || string.IsNullOrWhiteSpace(_selectedReceiptPrinter))" @onclick="TestReceiptPrinterAsync">
+                @if (_receiptTestBusy)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                Test receipt
+            </button>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(_receiptPrinterStatus))
+        {
+            <p class="muted small" role="status">@_receiptPrinterStatus</p>
+        }
+    </div>
+}
+
+<h2 class="settings-section-title" style="margin-top:2rem;">Receipt logo</h2>
+<p class="muted">Printed centered at the top of sale and refund receipts. Saved on this PC only. Use a simple high-contrast image (it prints black &amp; white, max width ~48 mm).</p>
+
+<div class="settings-form">
+    @if (_logoPreviewBase64 is not null)
+    {
+        <div class="receipt-logo-preview" style="margin:0.5rem 0;">
+            <img src="@($"data:image/png;base64,{_logoPreviewBase64}")" alt="Receipt logo" style="max-width:200px; max-height:120px; background:#fff; padding:8px; border:1px solid var(--pos-border); border-radius:6px;" />
+        </div>
+    }
+    else
+    {
+        <p class="muted small">No logo set — receipts print the store name only.</p>
+    }
+    <div class="modal-actions" style="margin-top:0.5rem; flex-wrap:wrap; gap:0.5rem;">
+        <button type="button" class="btn primary touch-target" disabled="@_logoBusy" @onclick="PickReceiptLogoAsync">
+            @if (_logoBusy)
+            {
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+            }
+            @(_logoPreviewBase64 is null ? "Choose logo image" : "Replace logo")
+        </button>
+        @if (_logoPreviewBase64 is not null)
+        {
+            <button type="button" class="btn secondary touch-target" disabled="@_logoBusy" @onclick="RemoveReceiptLogo">Remove logo</button>
+            <button type="button" class="btn secondary touch-target" disabled="@(_logoBusy || _receiptTestBusy || string.IsNullOrWhiteSpace(_selectedReceiptPrinter))" @onclick="TestReceiptPrinterAsync">Test receipt with logo</button>
+        }
+    </div>
+    @if (!string.IsNullOrWhiteSpace(_logoStatus))
+    {
+        <p class="muted small" role="status">@_logoStatus</p>
+    }
+</div>
+
+<h2 class="settings-section-title" style="margin-top:2rem;">Database backup (Discord)</h2>
+<p class="muted">A compressed copy of the store SQLite database is sent to Discord on a timer. The API also appends a line to <code class="mono">logs/backup.log</code> for each attempt. The webhook must be stored on the server: use <strong>Save backup settings</strong>, or <strong>Run backup now</strong> (that saves the current URL and interval first).</p>
+
+<details class="settings-help-block">
+    <summary class="touch-target">Discord webhook setup (channel name: <strong>kaif-database-backup</strong>)</summary>
+    <ol class="muted small" style="margin:0.5rem 0 0 1.25rem;">
+        <li>Open Discord → your server.</li>
+        <li>Create or open a channel named exactly <span class="mono">kaif-database-backup</span>.</li>
+        <li>Channel → gear icon → Integrations → Webhooks → New Webhook → copy the Webhook URL.</li>
+        <li>Paste it below, or set <span class="mono">BackupSettings:DiscordWebhookUrl</span> in the API configuration (prefer user secrets in development — do not commit real URLs).</li>
+    </ol>
+</details>
+
+@if (!string.IsNullOrWhiteSpace(_backupStatus))
+{
+    <p class="success-banner" role="status">@_backupStatus</p>
+}
+@if (_backupLoadError is not null)
+{
+    <p class="error" role="alert">@_backupLoadError</p>
+}
+
+<div class="settings-form" style="margin-top:1rem;">
+    <p class="muted small">
+        Last backup (UTC stored; shown local):
+        <strong>@(_lastBackupUtc is null ? "—" : _lastBackupUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))</strong>
+    </p>
+    <div class="field">
+        <label for="backup-webhook">Discord backup webhook URL</label>
+        <input id="backup-webhook" type="password" class="input touch-input" @bind="_backupWebhook" @bind:event="oninput" autocomplete="off" placeholder="https://discord.com/api/webhooks/…" />
+    </div>
+    <div class="field">
+        <label for="backup-interval">Backup interval</label>
+        <select id="backup-interval" class="input touch-input" @bind="_backupIntervalHours">
+            <option value="12">Every 12 hours</option>
+            <option value="24">Every 24 hours</option>
+            <option value="48">Every 48 hours</option>
+        </select>
+        <span class="muted small">Runs once when the API starts, then waits this long between runs.</span>
+    </div>
+    <div class="modal-actions" style="margin-top:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+        <button type="button" class="btn secondary touch-target" disabled="@(_backupSaveBusy || _backupRunBusy)" @onclick="SaveBackupAsync">
+            @if (_backupSaveBusy)
+            {
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+            }
+            Save backup settings
+        </button>
+        <button type="button" class="btn primary touch-target" disabled="@(_backupSaveBusy || _backupRunBusy)" @onclick="RunBackupNowAsync">
+            @if (_backupRunBusy)
+            {
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+            }
+            Run backup now
+        </button>
+    </div>
+</div>
+
+<h2 class="settings-section-title" style="margin-top:2rem;">Restore from backup</h2>
+<p class="muted">Upload a <span class="mono">store-backup-….zip</span> file downloaded from Discord (or a raw <span class="mono">.db</span> file). This <strong>replaces the current database</strong> with the backup. A safety copy of the current database is saved in <span class="mono">backups/pre-restore-….zip</span> first.</p>
+
+<div class="settings-form" style="margin-top:1rem;">
+    <div class="field">
+        <label for="restore-file">Backup file</label>
+        <InputFile id="restore-file" OnChange="OnRestoreFileSelected" accept=".zip,.db" disabled="@_restoreBusy" />
+        @if (!string.IsNullOrWhiteSpace(_restoreFileName))
+        {
+            <p class="muted small">Selected: @_restoreFileName</p>
+        }
+    </div>
+    <button type="button" class="btn secondary touch-target danger-link" disabled="@(_restoreBusy || string.IsNullOrWhiteSpace(_restoreFileName))" @onclick="RestoreDatabaseAsync">
+        @if (_restoreBusy)
+        {
+            <span class="spinner spinner-sm" aria-hidden="true"></span>
+        }
+        Restore database
+    </button>
+</div>
+
+@code {
+    private readonly SettingsForm _model = new();
+    private string? _error;
+    private bool _success;
+    private bool _busy;
+    private string? _lanDashboardUrl;
+    private bool _copyFeedback;
+
+    private string _backupWebhook = "";
+    private int _backupIntervalHours = 24;
+    private DateTime? _lastBackupUtc;
+    private string? _backupLoadError;
+    private string? _backupStatus;
+    private bool _backupSaveBusy;
+    private bool _backupRunBusy;
+    private bool _restoreBusy;
+    private string? _restoreFileName;
+    private IBrowserFile? _restoreFile;
+
+    private List<string> _printers = new();
+    private string _selectedBarcodePrinter = "";
+    private int _labelWidthMm = 35;
+    private int _labelHeightMm = 25;
+    private string? _driverPaperSummary;
+    private string? _barcodePrinterStatus;
+    private bool _testPrintBusy;
+    private int _calibrationCount = 3;
+    private string? _calibrationPreviewBase64;
+    private LabelPrintJobInfo? _labelJobInfo;
+
+    private List<string> _receiptPrinters = new();
+    private string _selectedReceiptPrinter = "";
+    private string? _receiptPrinterStatus;
+    private bool _receiptTestBusy;
+
+    private string? _logoPreviewBase64;
+    private string? _logoStatus;
+    private bool _logoBusy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        CopyFromService();
+        StoreSettings.Changed += OnSettingsChanged;
+        _logoPreviewBase64 = ReceiptLogo.GetBase64();
+        try
+        {
+            var ip = Dns.GetHostAddresses(Dns.GetHostName())
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork
+                    && !System.Net.IPAddress.IsLoopback(a));
+            if (ip is not null)
+                _lanDashboardUrl = $"http://{ip}:5050";
+        }
+        catch
+        {
+            _lanDashboardUrl = null;
+        }
+
+        await LoadBackupSettingsAsync();
+        LoadBarcodePrinterSettings();
+        LoadReceiptPrinterSettings();
+        RefreshLabelJobInfo();
+        RefreshCalibrationPreview();
+    }
+
+    private void LoadReceiptPrinterSettings()
+    {
+        if (!ReceiptPrinter.IsSupported)
+            return;
+
+        _receiptPrinters = ReceiptPrinter.GetInstalledPrinters().ToList();
+        _selectedReceiptPrinter = ReceiptPrinter.GetSelectedPrinter() ?? "";
+        if (!string.IsNullOrWhiteSpace(_selectedReceiptPrinter) && !_receiptPrinters.Contains(_selectedReceiptPrinter))
+            _receiptPrinters.Insert(0, _selectedReceiptPrinter);
+    }
+
+    private async Task PickReceiptLogoAsync()
+    {
+        _logoBusy = true;
+        _logoStatus = null;
+        try
+        {
+            var result = await FilePicker.Default.PickAsync(new PickOptions
+            {
+                PickerTitle = "Choose receipt logo",
+                FileTypes = FilePickerFileType.Images,
+            });
+            if (result is null)
+                return;
+
+            await using (var stream = await result.OpenReadAsync())
+            {
+                await ReceiptLogo.SaveAsync(stream);
+            }
+
+            _logoPreviewBase64 = ReceiptLogo.GetBase64();
+            _logoStatus = "Logo saved. It will print at the top of every receipt.";
+        }
+        catch (Exception ex)
+        {
+            _logoStatus = $"Could not load image: {ex.Message}";
+        }
+        finally
+        {
+            _logoBusy = false;
+        }
+    }
+
+    private void RemoveReceiptLogo()
+    {
+        ReceiptLogo.Remove();
+        _logoPreviewBase64 = null;
+        _logoStatus = "Logo removed — receipts will print the store name only.";
+    }
+
+    private void SaveReceiptPrinterAsync()
+    {
+        ReceiptPrinter.SetSelectedPrinter(string.IsNullOrWhiteSpace(_selectedReceiptPrinter) ? null : _selectedReceiptPrinter);
+        _receiptPrinterStatus = string.IsNullOrWhiteSpace(_selectedReceiptPrinter)
+            ? "Receipt printer cleared — POS will use the browser print dialog."
+            : $"Saved receipt printer: {_selectedReceiptPrinter}";
+    }
+
+    private async Task TestReceiptPrinterAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedReceiptPrinter))
+            return;
+
+        SaveReceiptPrinterAsync();
+        _receiptTestBusy = true;
+        _receiptPrinterStatus = null;
+        try
+        {
+            var sample = new ReceiptDto(
+                ReceiptNumber: "RCP-TEST",
+                Date: DateTime.Now,
+                StoreName: StoreSettings.StoreName,
+                StoreAddress: null,
+                ReceiptLandline: string.IsNullOrWhiteSpace(_model.ReceiptLandline) ? StoreSettings.ReceiptLandline : _model.ReceiptLandline,
+                ReceiptPhone: string.IsNullOrWhiteSpace(_model.ReceiptPhone) ? StoreSettings.ReceiptPhone : _model.ReceiptPhone,
+                Lines:
+                [
+                    new ReceiptLineDto("Nike Air Max", "42", 1, 199m, 199m),
+                    new ReceiptLineDto("Adidas Samba", "41", 2, 179m, 358m),
+                ],
+                Subtotal: 557m,
+                Discount: 50m,
+                Tax: 25m,
+                Total: 532m);
+
+            if (ReceiptPrinter.PrintReceipt(sample, App.Username))
+                _receiptPrinterStatus = "Test receipt sent to the printer.";
+            else
+                _receiptPrinterStatus = "Print failed — check that the printer is online and set to ESC/POS.";
+        }
+        catch (Exception ex)
+        {
+            _receiptPrinterStatus = ex.Message;
+        }
+        finally
+        {
+            _receiptTestBusy = false;
+        }
+    }
+
+    private void LoadBarcodePrinterSettings()
+    {
+        if (!BarcodePrinter.IsSupported)
+            return;
+
+        _printers = BarcodePrinter.GetInstalledPrinters().ToList();
+        _selectedBarcodePrinter = BarcodePrinter.GetSelectedPrinter() ?? "";
+        _labelWidthMm = BarcodePrinter.GetLabelWidthMm();
+        _labelHeightMm = BarcodePrinter.GetLabelHeightMm();
+        if (_labelWidthMm == 50 && _labelHeightMm == 30)
+        {
+            _labelWidthMm = 35;
+            _labelHeightMm = 25;
+            BarcodePrinter.SetLabelSizeMm(_labelWidthMm, _labelHeightMm);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_selectedBarcodePrinter) && !_printers.Contains(_selectedBarcodePrinter))
+            _printers.Insert(0, _selectedBarcodePrinter);
+        RefreshDriverPaperSummary();
+        RefreshLabelJobInfo();
+    }
+
+    private void OnBarcodePrinterChanged() => RefreshDriverPaperSummary();
+
+    private void RefreshLabelJobInfo()
+    {
+        if (!BarcodePrinter.IsSupported)
+        {
+            _labelJobInfo = null;
+            return;
+        }
+
+        BarcodePrinter.SetLabelSizeMm(_labelWidthMm, _labelHeightMm);
+        _labelJobInfo = BarcodePrint.GetPrintJobInfo();
+    }
+
+    private void RefreshCalibrationPreview()
+    {
+        if (!BarcodePrinter.IsSupported)
+        {
+            _calibrationPreviewBase64 = null;
+            return;
+        }
+
+        BarcodePrinter.SetLabelSizeMm(_labelWidthMm, _labelHeightMm);
+        _calibrationPreviewBase64 = BarcodePrint.GetCalibrationFramePngBase64();
+    }
+
+    private Task RefreshCalibrationPreviewAsync()
+    {
+        SaveBarcodePrinterAsync();
+        RefreshLabelJobInfo();
+        RefreshCalibrationPreview();
+        _barcodePrinterStatus = _labelJobInfo is null
+            ? null
+            : $"Preview updated — {_labelJobInfo.Summary}";
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveCalibrationPreviewAsync()
+    {
+        SaveBarcodePrinterAsync();
+        _testPrintBusy = true;
+        _barcodePrinterStatus = null;
+        try
+        {
+            var path = await BarcodePrint.SaveCalibrationPreviewAsync();
+            if (path is null)
+            {
+                _barcodePrinterStatus = "Calibration preview save is only available on Windows.";
+                Toasts.Error(_barcodePrinterStatus);
+                return;
+            }
+
+            RefreshLabelJobInfo();
+            RefreshCalibrationPreview();
+            _barcodePrinterStatus = $"Saved printer raster: {path} (and .txt summary)";
+            Toasts.Success("Preview saved");
+        }
+        catch (Exception ex)
+        {
+            _barcodePrinterStatus = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _testPrintBusy = false;
+        }
+    }
+
+    private async Task PrintCalibrationFrameAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedBarcodePrinter))
+            return;
+
+        SaveBarcodePrinterAsync();
+        _testPrintBusy = true;
+        _barcodePrinterStatus = null;
+        try
+        {
+            var (ok, err) = await BarcodePrint.PrintCalibrationFrameAsync(_calibrationCount);
+            if (ok)
+            {
+                _barcodePrinterStatus = $"Sent {_calibrationCount} corner-frame label(s). Each sticker should show L-marks in all four corners.";
+                Toasts.Success("Calibration print sent");
+            }
+            else
+            {
+                _barcodePrinterStatus = err ?? "Calibration print failed.";
+                Toasts.Error(_barcodePrinterStatus);
+            }
+        }
+        catch (Exception ex)
+        {
+            _barcodePrinterStatus = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _testPrintBusy = false;
+        }
+    }
+
+    private void RefreshDriverPaperSummary()
+    {
+        _driverPaperSummary = string.IsNullOrWhiteSpace(_selectedBarcodePrinter)
+            ? null
+            : BarcodePrinter.GetDriverPaperSummary(_selectedBarcodePrinter);
+    }
+
+    private void SaveBarcodePrinterAsync()
+    {
+        BarcodePrinter.SetSelectedPrinter(string.IsNullOrWhiteSpace(_selectedBarcodePrinter) ? null : _selectedBarcodePrinter);
+        BarcodePrinter.SetLabelSizeMm(_labelWidthMm, _labelHeightMm);
+        RefreshDriverPaperSummary();
+        RefreshLabelJobInfo();
+        RefreshCalibrationPreview();
+        _barcodePrinterStatus = string.IsNullOrWhiteSpace(_selectedBarcodePrinter)
+            ? "Printer cleared — you will be asked each time you print."
+            : $"Saved: {_selectedBarcodePrinter} ({_labelWidthMm}×{_labelHeightMm} mm). Driver: {_driverPaperSummary ?? "unknown"}";
+        Toasts.Success(string.IsNullOrWhiteSpace(_selectedBarcodePrinter) ? "Using print dialog" : "Barcode printer saved");
+    }
+
+    private async Task TestEan8PrintAsync()
+    {
+        if (BarcodePrinter.IsSupported && !string.IsNullOrWhiteSpace(_selectedBarcodePrinter))
+            SaveBarcodePrinterAsync();
+
+        _testPrintBusy = true;
+        _barcodePrinterStatus = null;
+        try
+        {
+            var label = await Http.GetFromJsonAsync<BarcodeTestLabelDto>("api/barcodes/test-ean8?forLabelPrint=true", AppJson.Options);
+            if (label is null || string.IsNullOrEmpty(label.BarcodePngBase64))
+            {
+                _barcodePrinterStatus = "Could not load EAN-8 test label.";
+                Toasts.Error(_barcodePrinterStatus);
+                return;
+            }
+
+            var (ok, usedNative, printError) = await BarcodePrint.PrintAsync(label.BarcodePngBase64, 1);
+            if (ok && usedNative)
+            {
+                _barcodePrinterStatus = $"EAN-8 test label sent. Expect scan: {label.Barcode}";
+                Toasts.Success("EAN-8 test print sent");
+            }
+            else if (ok)
+            {
+                _barcodePrinterStatus = $"Print dialog opened. Expect scan: {label.Barcode}";
+            }
+            else
+            {
+                _barcodePrinterStatus = printError ?? "EAN-8 test print failed.";
+                Toasts.Error(_barcodePrinterStatus);
+            }
+        }
+        catch (Exception ex)
+        {
+            _barcodePrinterStatus = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _testPrintBusy = false;
+        }
+    }
+
+    private async Task TestBarcodePrinterAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedBarcodePrinter))
+            return;
+
+        SaveBarcodePrinterAsync();
+        _testPrintBusy = true;
+        _barcodePrinterStatus = null;
+        try
+        {
+            var rows = await Http.GetFromJsonAsync<List<StockRowDto>>("api/stock", AppJson.Options) ?? new();
+            var barcode = rows.FirstOrDefault(r => !string.IsNullOrEmpty(r.Barcode))?.Barcode;
+            if (barcode is null)
+            {
+                _barcodePrinterStatus = "Add at least one product SKU before testing.";
+                Toasts.Error("No barcodes in the catalog yet.");
+                return;
+            }
+
+            var key = Uri.EscapeDataString(barcode);
+            var detail = await Http.GetFromJsonAsync<SkuDetailDto>($"api/skus/{key}?forLabelPrint=true", AppJson.Options);
+            if (detail is null || string.IsNullOrEmpty(detail.BarcodePngBase64))
+            {
+                _barcodePrinterStatus = "Could not load label image.";
+                Toasts.Error("Could not load label image.");
+                return;
+            }
+
+            var (ok, usedNative, printError) = await BarcodePrint.PrintAsync(detail.BarcodePngBase64, 1);
+            if (ok && usedNative)
+            {
+                _barcodePrinterStatus = "Test label sent to the printer.";
+                Toasts.Success("Test print sent");
+            }
+            else if (ok)
+            {
+                _barcodePrinterStatus = "Opened print dialog (no saved printer).";
+            }
+            else
+            {
+                _barcodePrinterStatus = printError ?? "Test print failed — check that the printer is online.";
+                Toasts.Error(_barcodePrinterStatus);
+            }
+        }
+        catch (Exception ex)
+        {
+            _barcodePrinterStatus = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _testPrintBusy = false;
+        }
+    }
+
+    private async Task CopyDashboardUrlAsync()
+    {
+        if (_lanDashboardUrl is null)
+            return;
+        try
+        {
+            await Js.InvokeVoidAsync("storeCopyText", _lanDashboardUrl);
+            _copyFeedback = true;
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(1600);
+            _copyFeedback = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            _error = "Could not copy (clipboard blocked).";
+        }
+    }
+
+    private void OnSettingsChanged()
+    {
+        CopyFromService();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void CopyFromService()
+    {
+        _model.StoreName = StoreSettings.StoreName;
+        _model.CurrencyLabel = StoreSettings.CurrencyLabel;
+        _model.LowStockThreshold = StoreSettings.LowStockThreshold;
+        _model.AllowSellerDiscount = StoreSettings.AllowSellerDiscount;
+        _model.ReceiptLandline = StoreSettings.ReceiptLandline;
+        _model.ReceiptPhone = StoreSettings.ReceiptPhone;
+    }
+
+    private async Task LoadBackupSettingsAsync()
+    {
+        _backupLoadError = null;
+        try
+        {
+            var dto = await Http.GetFromJsonAsync<BackupSettingsAdminDto>("api/settings/backup", AppJson.Options);
+            if (dto is null)
+                return;
+            _backupWebhook = dto.DiscordWebhookUrl ?? "";
+            _backupIntervalHours = dto.BackupIntervalHours is 12 or 24 or 48 ? dto.BackupIntervalHours : 24;
+            _lastBackupUtc = dto.LastBackupUtc;
+        }
+        catch (Exception ex)
+        {
+            _backupLoadError = $"Could not load backup settings: {ex.Message}";
+        }
+    }
+
+    private async Task SaveBackupAsync()
+    {
+        _backupLoadError = null;
+        _backupSaveBusy = true;
+        try
+        {
+            var body = new BackupSettingsUpdateDto(_backupWebhook.Trim(), _backupIntervalHours);
+            using var resp = await Http.PutAsJsonAsync("api/settings/backup", body, AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _backupLoadError = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_backupLoadError) ? "Save failed." : _backupLoadError);
+                return;
+            }
+
+            Toasts.Success("Backup settings saved");
+            await LoadBackupSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            _backupLoadError = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _backupSaveBusy = false;
+        }
+    }
+
+    private void OnRestoreFileSelected(InputFileChangeEventArgs e)
+    {
+        _restoreFile = e.File;
+        _restoreFileName = e.File.Name;
+        _backupLoadError = null;
+        _backupStatus = null;
+    }
+
+    private async Task RestoreDatabaseAsync()
+    {
+        if (_restoreFile is null)
+            return;
+
+        var ok = await Js.InvokeAsync<bool>(
+            "storePosConfirm",
+            "Restore database from this backup? All current store data will be replaced. Continue?");
+        if (!ok)
+            return;
+
+        _backupLoadError = null;
+        _backupStatus = null;
+        _restoreBusy = true;
+        try
+        {
+            const long maxBytes = 25L * 1024 * 1024;
+            await using var stream = _restoreFile.OpenReadStream(maxBytes);
+            using var content = new MultipartFormDataContent();
+            var fileContent = new StreamContent(stream);
+            fileContent.Headers.ContentType = new MediaTypeHeaderValue(_restoreFile.ContentType);
+            content.Add(fileContent, "file", _restoreFile.Name);
+
+            using var resp = await Http.PostAsync("api/backup/restore", content);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var err = await resp.Content.ReadAsStringAsync();
+                _backupLoadError = string.IsNullOrWhiteSpace(err) ? $"Restore failed ({(int)resp.StatusCode})." : err;
+                Toasts.Error(_backupLoadError);
+                return;
+            }
+
+            var result = await resp.Content.ReadFromJsonAsync<BackupRunResponse>(AppJson.Options);
+            if (result is null)
+            {
+                Toasts.Error("Invalid response from server.");
+                return;
+            }
+
+            if (result.Success)
+            {
+                _backupLoadError = null;
+                _backupStatus = string.IsNullOrWhiteSpace(result.Message) ? "Database restored." : result.Message;
+                Toasts.Success(_backupStatus);
+                _restoreFile = null;
+                _restoreFileName = null;
+            }
+            else
+            {
+                _backupLoadError = string.IsNullOrWhiteSpace(result.Message) ? "Restore failed." : result.Message;
+                Toasts.Error(_backupLoadError);
+            }
+        }
+        catch (Exception ex)
+        {
+            _backupLoadError = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _restoreBusy = false;
+        }
+    }
+
+    private async Task RunBackupNowAsync()
+    {
+        _backupLoadError = null;
+        _backupRunBusy = true;
+        try
+        {
+            // Server reads webhook from DB / appsettings — not from this form until saved.
+            using (var saveResp = await Http.PutAsJsonAsync(
+                       "api/settings/backup",
+                       new BackupSettingsUpdateDto(_backupWebhook.Trim(), _backupIntervalHours),
+                       AppJson.Options))
+            {
+                if (!saveResp.IsSuccessStatusCode)
+                {
+                    var err = await saveResp.Content.ReadAsStringAsync();
+                    _backupLoadError = err;
+                    Toasts.Error(string.IsNullOrWhiteSpace(err) ? "Could not save backup settings before run." : err);
+                    return;
+                }
+            }
+
+            using var resp = await Http.SendAsync(new HttpRequestMessage(HttpMethod.Post, "api/backup/run-now"));
+            if (!resp.IsSuccessStatusCode)
+            {
+                var err = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(err) ? $"Backup request failed ({(int)resp.StatusCode})." : err);
+                return;
+            }
+
+            var result = await resp.Content.ReadFromJsonAsync<BackupRunResponse>(AppJson.Options);
+            if (result is null)
+            {
+                Toasts.Error("Invalid response from server.");
+                return;
+            }
+
+            if (result.Success)
+            {
+                _backupLoadError = null;
+                _backupStatus = string.IsNullOrWhiteSpace(result.Message) ? "Backup sent to Discord." : result.Message;
+                await LoadBackupSettingsAsync();
+            }
+            else
+            {
+                _backupStatus = null;
+                _backupLoadError = string.IsNullOrWhiteSpace(result.Message)
+                    ? "Backup failed — check API logs/backup.log."
+                    : result.Message;
+            }
+        }
+        catch (Exception ex)
+        {
+            _backupLoadError = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _backupRunBusy = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _success = false;
+        _busy = true;
+        try
+        {
+            var dto = new PosSettingsDto(
+                _model.StoreName.Trim(),
+                _model.CurrencyLabel.Trim(),
+                _model.AllowSellerDiscount,
+                _model.LowStockThreshold,
+                string.IsNullOrWhiteSpace(_model.ReceiptLandline) ? null : _model.ReceiptLandline.Trim(),
+                string.IsNullOrWhiteSpace(_model.ReceiptPhone) ? null : _model.ReceiptPhone.Trim());
+            using var resp = await Http.PutAsJsonAsync("api/settings", dto, AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                return;
+            }
+
+            await StoreSettings.LoadFromApiAsync(Http);
+            _success = true;
+            Toasts.Success("Settings saved");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        StoreSettings.Changed -= OnSettingsChanged;
+    }
+
+    private sealed class SettingsForm
+    {
+        public string StoreName { get; set; } = "";
+        public string CurrencyLabel { get; set; } = "";
+        public string ReceiptLandline { get; set; } = "";
+        public string ReceiptPhone { get; set; } = "";
+        public int LowStockThreshold { get; set; } = 5;
+        public bool AllowSellerDiscount { get; set; }
+    }
+}

@@ -1,0 +1,87 @@
+@implements IDisposable
+@inject AppState App
+@inject NavigationManager Nav
+@inject StoreSettingsService StoreSettings
+@inject IJSRuntime Js
+@using StoreShared
+
+<header class="nav-bar">
+    <div class="nav-bar-left">
+        <span class="nav-bar-brand">@StoreSettings.StoreName</span>
+        <nav class="nav-bar-links" aria-label="Main">
+            <NavLink class="nav-bar-link" href="/pos" Match="NavLinkMatch.All">POS</NavLink>
+            @if (IsAdmin)
+            {
+                <NavLink class="nav-bar-link" href="/products">Products</NavLink>
+                <NavLink class="nav-bar-link" href="/stock">Stock</NavLink>
+                <NavLink class="nav-bar-link" href="/sales">Sales</NavLink>
+                <NavLink class="nav-bar-link" href="/users">Users</NavLink>
+                <NavLink class="nav-bar-link" href="/settings">Settings</NavLink>
+            }
+            else if (IsSeller)
+            {
+                <NavLink class="nav-bar-link" href="/sales">Sales</NavLink>
+            }
+        </nav>
+    </div>
+    <div class="nav-bar-center" aria-live="polite">@PageTitle</div>
+    <div class="nav-bar-right">
+        <span class="nav-bar-user">@App.Username</span>
+        <span class="role-badge" title="Role">@App.Role</span>
+        <button type="button" class="nav-bar-logout touch-target" @onclick="LogoutAsync">Logout</button>
+    </div>
+</header>
+
+@code {
+    private bool IsAdmin => string.Equals(App.Role, nameof(UserRole.Admin), StringComparison.OrdinalIgnoreCase);
+
+    private bool IsSeller => string.Equals(App.Role, nameof(UserRole.Seller), StringComparison.OrdinalIgnoreCase);
+
+    private string PageTitle => ResolveTitle(Nav.ToBaseRelativePath(Nav.Uri));
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        StoreSettings.Changed += OnStoreSettingsChanged;
+    }
+
+    private void OnStoreSettingsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static string ResolveTitle(string relative)
+    {
+        var path = (relative ?? "").Trim('/').ToLowerInvariant();
+        var seg = path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+
+        return seg switch
+        {
+            "" or "pos" => "POS",
+            "products" => "Products",
+            "stock" => "Stock",
+            "sales" => "Sales",
+            "users" => "Users",
+            "settings" => "Settings",
+            "my-sales" => "My sales",
+            _ => "Store POS",
+        };
+    }
+
+    private async Task LogoutAsync()
+    {
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", "Log out?");
+        if (!ok)
+            return;
+        App.Logout();
+        Nav.NavigateTo("/login", replace: true);
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        StoreSettings.Changed -= OnStoreSettingsChanged;
+    }
+}

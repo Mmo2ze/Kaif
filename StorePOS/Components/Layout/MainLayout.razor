@@ -1,0 +1,14 @@
+@inherits LayoutComponentBase
+@inject AppState AppState
+
+<div class="page page-app">
+    <NavBar />
+        @if (!string.IsNullOrWhiteSpace(AppState.ServerWarning))
+        {
+            <div class="server-warning-banner" role="alert">@AppState.ServerWarning</div>
+        }
+
+        <main class="main-with-nav">
+            @Body
+        </main>
+</div>

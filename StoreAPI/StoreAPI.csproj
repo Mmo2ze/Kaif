@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>StoreAPI</RootNamespace>
+    <StoreWebDir>$(MSBuildThisFileDirectory)..\StoreWeb</StoreWebDir>
+    <DefaultItemExcludes>$(DefaultItemExcludes);wwwroot\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BarcodeLib" Version="3.1.5" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.0" />
+    <PackageReference Include="SkiaSharp.HarfBuzz" Version="2.88.8" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StoreShared\StoreShared.csproj" />
+  </ItemGroup>
+
+  <!-- Only rebuild the React app when publishing or when explicitly requested
+       (dotnet build -p:BuildReact=true). Running npm ci on every dev build is slow
+       and fails with EPERM while the Vite dev server has node_modules locked. -->
+  <Target Name="BuildReactClient" BeforeTargets="Build" Condition="Exists('$(StoreWebDir)\package.json') AND '$(BuildReact)' != 'false' AND ('$(BuildReact)' == 'true' OR '$(_IsPublishing)' == 'true')">
+    <Exec Command="npm ci" WorkingDirectory="$(StoreWebDir)" Condition="Exists('$(StoreWebDir)\package-lock.json')" />
+    <Exec Command="npm install" WorkingDirectory="$(StoreWebDir)" Condition="!Exists('$(StoreWebDir)\package-lock.json')" />
+    <Exec Command="npm run build" WorkingDirectory="$(StoreWebDir)" />
+  </Target>
+
+  <Target Name="CopyReactClient" AfterTargets="Build">
+    <ItemGroup>
+      <ReactDistFiles Include="$(StoreWebDir)\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ReactDistFiles)" DestinationFolder="$(OutputPath)wwwroot\%(RecursiveDir)" SkipUnchangedFiles="true" Condition="Exists('$(StoreWebDir)\dist')" />
+  </Target>
+
+  <!-- Include the React build in dotnet publish output (wwwroot is excluded from
+       project items above, so it is not published automatically). -->
+  <Target Name="PublishReactClient" AfterTargets="ComputeFilesToPublish" Condition="Exists('$(StoreWebDir)\dist')">
+    <ItemGroup>
+      <_ReactDistPublishFiles Include="$(StoreWebDir)\dist\**\*" />
+      <ResolvedFileToPublish Include="@(_ReactDistPublishFiles)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>

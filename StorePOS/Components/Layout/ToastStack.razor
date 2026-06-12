@@ -1,0 +1,30 @@
+@implements IDisposable
+@inject ToastService Toasts
+
+<div class="toast-stack" aria-live="polite">
+    @foreach (var t in _snapshot)
+    {
+        <div class="toast toast-@t.Severity.ToString().ToLowerInvariant()" role="status">@t.Message</div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<ToastItem> _snapshot = Array.Empty<ToastItem>();
+
+    protected override void OnInitialized()
+    {
+        Toasts.Changed += OnToastsChanged;
+        _snapshot = Toasts.Snapshot;
+    }
+
+    private void OnToastsChanged()
+    {
+        _snapshot = Toasts.Snapshot;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Toasts.Changed -= OnToastsChanged;
+    }
+}

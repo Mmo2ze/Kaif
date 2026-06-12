@@ -1,0 +1,32 @@
+@using System.Reflection
+@using StorePOS.Auth
+
+@if (RouteData?.PageType is null)
+{
+    return;
+}
+
+@if (typeof(IAllowAnonymous).IsAssignableFrom(RouteData.PageType))
+{
+    @ChildContent
+}
+else if (!App.IsAuthenticated)
+{
+    <RedirectToUri Href="/login" />
+}
+else if (RouteData.PageType.GetCustomAttribute<AdminRouteAttribute>() is not null
+         && !string.Equals(App.Role, "Admin", StringComparison.OrdinalIgnoreCase))
+{
+    <RedirectToUri Href="/pos" />
+}
+else
+{
+    @ChildContent
+}
+
+@code {
+    [Parameter, EditorRequired] public RouteData RouteData { get; set; } = default!;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Inject] private AppState App { get; set; } = default!;
+}

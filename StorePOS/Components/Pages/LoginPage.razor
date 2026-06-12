@@ -1,0 +1,139 @@
+@page "/login"
+@layout EmptyLayout
+@implements IAllowAnonymous
+@using System.Net
+@using System.Net.Http
+@using System.Net.Http.Json
+@using StoreShared.Auth
+@inject HttpClient Http
+@inject AppState App
+@inject NavigationManager Nav
+@inject StoreSettingsService StoreSettings
+
+<div class="login-fullscreen">
+    <div class="login-brand-block">
+        <div class="login-logo" aria-hidden="true">CS</div>
+        <h1 class="login-store-name">@StoreSettings.StoreName</h1>
+        <p class="login-tagline muted">Point of Sale</p>
+    </div>
+
+    <div class="login-card">
+        <h2 class="login-heading">Sign in</h2>
+        <p class="muted login-sub">Use your store account</p>
+
+        <EditForm Model="_model" OnValidSubmit="SubmitAsync">
+            <div class="field">
+                <label for="user">Username</label>
+                <InputText id="user" class="input touch-input" @bind-Value="_model.Username" autocomplete="username" />
+            </div>
+            <div class="field">
+                <label for="pass">Password</label>
+                <InputText id="pass" type="password" class="input touch-input" @bind-Value="_model.Password" autocomplete="current-password" />
+            </div>
+            @if (_error is not null)
+            {
+                <p class="error login-error" role="alert">@_error</p>
+            }
+            <div class="login-actions">
+                <button type="submit" class="btn primary full-width touch-target" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    @(_busy ? "Signing in…" : "Login")
+                </button>
+                @if (_offline)
+                {
+                    <button type="button" class="btn secondary full-width touch-target" @onclick="RetryAsync" disabled="@_busy">Retry</button>
+                }
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private readonly LoginFormModel _model = new();
+    private string? _error;
+    private bool _busy;
+    private bool _offline;
+
+    private async Task RetryAsync()
+    {
+        _offline = false;
+        _error = null;
+        await SubmitAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _offline = false;
+        _busy = true;
+        try
+        {
+            var loginBody = new LoginRequest(_model.Username.Trim(), _model.Password);
+            using var loginResponse = await Http.PostAsJsonAsync("api/auth/login", loginBody, AppJson.Options);
+            if (!loginResponse.IsSuccessStatusCode)
+            {
+                _error = loginResponse.StatusCode == HttpStatusCode.Unauthorized
+                    ? "Invalid username or password."
+                    : "Unable to sign in. The server returned an error.";
+                return;
+            }
+
+            var login = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(AppJson.Options);
+            if (login is null || string.IsNullOrWhiteSpace(login.Token))
+            {
+                _error = "Unexpected response from server.";
+                return;
+            }
+
+            App.SetUser(login.Token, "", "", 0);
+            using var meResponse = await Http.GetAsync("api/auth/me");
+            if (!meResponse.IsSuccessStatusCode)
+            {
+                App.Logout();
+                _error = "Could not load your profile.";
+                return;
+            }
+
+            var me = await meResponse.Content.ReadFromJsonAsync<CurrentUserDto>(AppJson.Options);
+            if (me is null)
+            {
+                App.Logout();
+                _error = "Could not load your profile.";
+                return;
+            }
+
+            App.SetUser(login.Token, me.Username, me.Role.ToString(), me.Id);
+            Nav.NavigateTo("/pos", replace: true);
+        }
+        catch (HttpRequestException)
+        {
+            App.Logout();
+            _offline = true;
+            _error = "Cannot connect to store server. Make sure StoreAPI is running.";
+        }
+        catch (TaskCanceledException)
+        {
+            App.Logout();
+            _offline = true;
+            _error = "Cannot connect to store server. Make sure StoreAPI is running.";
+        }
+        catch (Exception)
+        {
+            App.Logout();
+            _error = "Something went wrong. Please try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class LoginFormModel
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+}

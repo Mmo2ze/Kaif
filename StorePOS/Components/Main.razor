@@ -1,0 +1,102 @@
+@using System.Runtime.InteropServices
+@inject StoreApiAutoStartService ApiStart
+@inject StoreSettingsService StoreSettings
+@inject AppState App
+@inject HttpClient Http
+
+@if (!_apiReady && _startupError is null)
+{
+    <div class="pos-startup-overlay">
+        <div class="pos-startup-card">
+            <p class="loading-with-spinner pos-startup-title">
+                <span class="spinner" aria-hidden="true"></span>
+                <span>@(_startupMessage ?? "Checking store server…")</span>
+            </p>
+            <p class="muted small">@StartupHint</p>
+        </div>
+    </div>
+}
+else if (_startupError is not null)
+{
+    <div class="pos-startup-overlay">
+        <div class="pos-startup-card">
+            <p class="pos-startup-title error" role="alert">@_startupError</p>
+            <p class="muted small">@StartupErrorHint</p>
+            <div class="modal-actions" style="margin-top:1rem;">
+                <button type="button" class="btn primary touch-target" @onclick="RetryStartupAsync">Retry</button>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <Routes />
+}
+
+@code {
+    private static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
+    private static string StartupHint => IsWindows
+        ? "Starting the store server (API + LAN web on port 5050). The first launch can take a minute while Windows verifies StoreAPI.exe."
+        : "Starting the store server (API + LAN web on port 5050). The first launch can take a minute on macOS.";
+
+    private static string StartupErrorHint => IsWindows
+        ? "Run from the publish folder (scripts\\publish-windows.ps1). StoreAPI.exe must sit beside StorePOS.exe. See StorePOS-api-launch.log in this folder."
+        : "Open the published Store POS.app (scripts/publish-macos.sh). StoreAPI must be inside the app bundle (Contents/MacOS). See StorePOS-api-launch.log beside the app.";
+
+    private bool _apiReady;
+    private string? _startupMessage;
+    private string? _startupError;
+
+    protected override Task OnInitializedAsync() => TryStartupAsync();
+
+    private async Task RetryStartupAsync()
+    {
+        _startupError = null;
+        _apiReady = false;
+        await InvokeAsync(StateHasChanged);
+        await TryStartupAsync();
+    }
+
+    private async Task TryStartupAsync()
+    {
+        var ok = await ApiStart.EnsureApiAvailableAsync(async msg =>
+        {
+            _startupMessage = msg;
+            await InvokeAsync(StateHasChanged);
+        });
+
+        if (!ok)
+        {
+            _startupError = "Could not reach the store server at http://127.0.0.1:5050/.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await StoreSettings.LoadFromApiAsync(Http);
+        await VerifyApiFeaturesAsync();
+        _apiReady = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task VerifyApiFeaturesAsync()
+    {
+        try
+        {
+            var health = await Http.GetApiJsonAsync<ApiHealthDto>("api/health");
+            if (health?.Features is null || !health.Features.Contains("sales-statistics"))
+            {
+                App.SetServerWarning(
+                    "An older StoreAPI is running on port 5050. Statistics, audit log, and backup need the latest StoreAPI — close the old one and restart from your current project build.");
+            }
+            else
+                App.SetServerWarning(null);
+        }
+        catch
+        {
+            App.SetServerWarning(null);
+        }
+    }
+
+    private sealed record ApiHealthDto(string Status, DateTimeOffset Time, int? ApiVersion, string[]? Features);
+}

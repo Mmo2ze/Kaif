@@ -1,0 +1,8 @@
+@page "/my-sales"
+@layout MainLayout
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized() =>
+        Nav.NavigateTo("/sales", replace: true);
+}
