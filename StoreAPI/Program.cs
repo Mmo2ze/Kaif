@@ -35,11 +35,12 @@ builder.Services.AddMemoryCache();
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
                  ?? new JwtOptions();
 
-var sqliteConnection = SqlitePathHelper.ResolveSqliteConnectionString(builder.Configuration, builder.Environment);
+var sqliteConnection = SqlitePathHelper.ResolveSqliteConnectionString(builder.Configuration, apiAssemblyDir);
 
 builder.Services.AddSingleton<JwtTokenIssuer>();
 builder.Services.AddSingleton<StoreRuntimeSettings>();
 builder.Services.AddSingleton<SkuBarcodeImageService>();
+builder.Services.AddSingleton<LabelPrintQueueService>();
 builder.Services.AddScoped<StockService>();
 builder.Services.AddScoped<RefundService>();
 builder.Services.AddScoped<SalesAnalyticsService>();
@@ -108,7 +109,7 @@ try
         app.UseSwaggerUI();
     }
 
-    app.UseStaticFiles();
+    app.UseStaticFiles(SpaStaticFileOptions.Create());
 
     app.UseRouting();
     app.UsePrivateNetworkAccessCors();
@@ -122,12 +123,13 @@ try
     {
         status = "ok",
         time = DateTimeOffset.UtcNow,
-        apiVersion = 2,
-        features = new[] { "sales-statistics", "sales-events", "backup-v2", "react" },
+        apiVersion = StoreBuild.ApiVersion,
+        labelRenderVersion = StoreBuild.LabelRenderVersion,
+        features = new[] { "sales-statistics", "sales-events", "backup-v2", "react", "label-print-queue" },
     }))
         .WithName("Health");
 
-    app.MapFallbackToFile("index.html");
+    app.MapFallbackToFile("index.html", SpaStaticFileOptions.Create());
 
     using (var scope = app.Services.CreateScope())
     {

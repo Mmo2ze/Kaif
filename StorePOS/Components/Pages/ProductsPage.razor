@@ -1,28 +1,32 @@
 @page "/products"
+@page "/stock"
 @layout MainLayout
-@attribute [AdminRoute]
 @using System.Net.Http.Json
 @using System.Net.Http.Headers
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.Components.Web
+@using StoreShared
 @using StoreShared.Catalog
+@using StoreShared.Pos
+@using StoreShared.Stock
 @using StorePOS.Services
 @inject HttpClient Http
 @inject IJSRuntime Js
 @inject StoreSettingsService StoreSettings
 @inject ToastService Toasts
 @inject BarcodePrintHelper BarcodePrint
+@inject AppState App
 
 <PageTitle>Products</PageTitle>
 
-<h1>Products &amp; barcodes</h1>
+<h1>Products</h1>
 
-@if (_reloadingCatalog && _models is not null)
+@if (_reloading && _products is not null)
 {
     <div class="page-loading-overlay" aria-busy="true">
         <div class="page-loading-inner">
             <span class="spinner" aria-hidden="true"></span>
-            <span>Refreshing catalog…</span>
+            <span>Refreshing…</span>
         </div>
     </div>
 }
@@ -32,236 +36,201 @@
     <p class="error">@_error</p>
 }
 
-<div class="admin-toolbar">
-    <button type="button" class="btn secondary" @onclick="() => _showAddModelForm = !_showAddModelForm">
-        @(_showAddModelForm ? "Hide add model" : "Add product model")
-    </button>
-    <button type="button" class="btn secondary" disabled="@(_models is null || _models.Count == 0)" @onclick="() => OpenAddSkuModal(null)">
-        Add size to model
-    </button>
-    <button type="button" class="btn secondary" disabled="@_exportBusy" @onclick="ExportCatalogAsync">
-        @(_exportBusy ? "Exporting…" : "Export products")
-    </button>
-    <label class="btn secondary" style="margin:0; cursor:@(_importBusy ? "default" : "pointer")">
-        @(_importBusy ? "Importing…" : "Import products")
-        <InputFile OnChange="OnImportFileSelected" accept=".json,application/json" disabled="@_importBusy" style="display:none" />
-    </label>
-</div>
-<p class="muted small">Export downloads product names and sizes only. Import adds missing products/sizes with stock 0; existing sizes keep their current stock. Set prices after import. Sales and settings are not affected.</p>
+<p class="muted">
+    @if (IsAdmin)
+    {
+        <span>Add products with name, prices, and starting stock. Adjust stock inline or print barcode labels.</span>
+    }
+    else
+    {
+        <span>View stock levels and print barcode labels.</span>
+    }
+    @if (_lowStockThreshold > 0)
+    {
+        <span> Below @_lowStockThreshold: amber; zero: red.</span>
+    }
+</p>
 
-@if (_showAddModelForm)
+@if (IsAdmin)
+{
+    <div class="admin-toolbar">
+        <button type="button" class="btn secondary" @onclick="() => _showAddForm = !_showAddForm">
+            @(_showAddForm ? "Hide add product" : "Add product")
+        </button>
+        <button type="button" class="btn secondary" disabled="@(_products is null || _products.Count == 0)" @onclick="ExportCatalogAsync">
+            @(_exportBusy ? "Exporting…" : "Export products")
+        </button>
+        <label class="btn secondary" style="margin:0; cursor:@(_importBusy ? "default" : "pointer")">
+            @(_importBusy ? "Importing…" : "Import products")
+            <InputFile OnChange="OnImportFileSelected" accept=".json,application/json" disabled="@_importBusy" style="display:none" />
+        </label>
+    </div>
+}
+
+@if (IsAdmin && _showAddForm)
 {
     <section class="admin-card">
-        <h2>New product model</h2>
-        <EditForm Model="_newModel" OnValidSubmit="CreateModelAsync">
+        <h2>New product</h2>
+        <EditForm Model="_newProduct" OnValidSubmit="CreateProductAsync">
             <div class="field">
                 <label for="pm-name">Name</label>
-                <InputText id="pm-name" class="input" @bind-Value="_newModel.Name" autocomplete="off" />
-            </div>
-            <div class="field">
-                <label for="pm-desc">Description (optional)</label>
-                <InputTextArea id="pm-desc" class="input" rows="3" @bind-Value="_newModel.Description" />
+                <InputText id="pm-name" class="input" @bind-Value="_newProduct.Name" autocomplete="off" />
             </div>
             <div class="field">
                 <label for="pm-buy">Buy price (@StoreSettings.CurrencyLabel)</label>
-                <InputNumber id="pm-buy" class="input" @bind-Value="_newModel.BuyPrice" />
+                <InputNumber id="pm-buy" class="input" @bind-Value="_newProduct.BuyPrice" />
             </div>
             <div class="field">
                 <label for="pm-price">Sell price (@StoreSettings.CurrencyLabel)</label>
-                <InputNumber id="pm-price" class="input" @bind-Value="_newModel.UnitPrice" />
+                <InputNumber id="pm-price" class="input" @bind-Value="_newProduct.UnitPrice" />
             </div>
             <div class="field">
                 <label for="pm-sale">Sale price (@StoreSettings.CurrencyLabel, optional)</label>
-                <InputNumber id="pm-sale" class="input" @bind-Value="_newModel.SalePrice" />
+                <InputNumber id="pm-sale" class="input" @bind-Value="_newProduct.SalePrice" />
             </div>
-            <button type="submit" class="btn primary" disabled="@_busyModel">
-                @if (_busyModel)
+            <div class="field">
+                <label for="pm-stock">Initial stock</label>
+                <InputNumber id="pm-stock" class="input" @bind-Value="_newProduct.InitialStock" />
+            </div>
+            <button type="submit" class="btn primary" disabled="@_busyAdd">
+                @if (_busyAdd)
                 {
                     <span class="spinner spinner-sm" aria-hidden="true"></span>
                 }
-                @(_busyModel ? "Saving…" : "Save model")
+                @(_busyAdd ? "Saving…" : "Save product")
             </button>
         </EditForm>
     </section>
 }
 
-<section class="admin-card">
-    <h2>Catalog</h2>
-    @if (_models is null)
-    {
-        <p class="loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading…</p>
-    }
-    else if (_models.Count == 0)
-    {
-        <p class="muted">No models yet. Add a product model first.</p>
-    }
-    else
-    {
-        <ul class="catalog-root">
-            @foreach (var m in _models)
-            {
-                <li class="catalog-model">
-                    <div class="catalog-model-header">
-                        <button type="button" class="expand-btn catalog-expand" @onclick="() => ToggleAsync(m.Id)">
-                            @(_expanded.Contains(m.Id) ? "▼" : "▶") @m.Name
-                            <span class="muted"> — @m.SkuCount SKU(s)</span>
-                        </button>
-                        <div class="catalog-model-actions">
-                            <button type="button" class="btn secondary catalog-add-size-btn" @onclick="() => OpenAddSkuModal(m.Id)">Add size</button>
-                            <button type="button" class="btn secondary" @onclick="() => OpenPriceModal(m)">Edit prices</button>
-                            <button type="button" class="btn secondary" @onclick="() => OpenModelModal(m)">Rename</button>
-                            <button type="button" class="btn secondary danger-link" disabled="@(_deletingModelId == m.Id)" @onclick="() => DeleteModelAsync(m)">@(_deletingModelId == m.Id ? "…" : "Delete product")</button>
-                        </div>
-                    </div>
-                    <div class="catalog-model-prices muted">
-                        Buy @MoneyFormat.Format(m.BuyPrice, StoreSettings.CurrencyLabel)
-                        · Sell
-                        @if (Pricing.IsOnSale(m.UnitPrice, m.SalePrice))
-                        {
-                            <span class="price-strike">@MoneyFormat.Format(m.UnitPrice, StoreSettings.CurrencyLabel)</span>
-                            <strong class="price-sale">@MoneyFormat.Format(m.SalePrice!.Value, StoreSettings.CurrencyLabel)</strong>
-                        }
-                        else
-                        {
-                            @MoneyFormat.Format(m.UnitPrice, StoreSettings.CurrencyLabel)
-                        }
-                    </div>
-                    @if (_expanded.Contains(m.Id))
-                    {
-                        @if (_skuLoadError.TryGetValue(m.Id, out var err))
-                        {
-                            <p class="error">@err</p>
-                        }
-                        else if (!_skusByModel.TryGetValue(m.Id, out var rows))
-                        {
-                            <p class="muted px-3">Loading sizes…</p>
-                        }
-                        else if (rows.Count == 0)
-                        {
-                            <p class="muted px-3">No SKUs yet.</p>
-                        }
-                        else
-                        {
-                            <table class="sku-table">
-                                <thead>
-                                <tr>
-                                    <th>Size</th>
-                                    <th>Barcode</th>
-                                    <th>Stock</th>
-                                    <th></th>
-                                    <th></th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                @foreach (var row in rows)
-                                {
-                                    <tr>
-                                        <td>@row.Size</td>
-                                        <td class="mono">@row.Barcode</td>
-                                        <td>@row.Stock</td>
-                                        <td class="sku-actions">
-                                            <button type="button" class="btn-link" disabled="@(_printBarcode == row.Barcode)" @onclick="() => PrintBarcodeForRowAsync(row.Barcode)">@(_printBarcode == row.Barcode ? "…" : "Print barcode")</button>
-                                        </td>
-                                        <td class="sku-actions">
-                                            <button type="button" class="btn-link danger-link" disabled="@(_deletingSkuId == row.Id)" @onclick="() => DeleteSkuAsync(m.Id, row)">@(_deletingSkuId == row.Id ? "…" : "Delete")</button>
-                                        </td>
-                                    </tr>
-                                }
-                                </tbody>
-                            </table>
-                        }
-                    }
-                </li>
-            }
-        </ul>
-    }
-</section>
+<div class="stock-toolbar">
+    <label class="filter-label" for="product-filter">Search (name)</label>
+    <input id="product-filter" class="input filter-input" @bind="_nameFilter" @bind:event="oninput" placeholder="Product name…" />
+    <button type="button" class="btn primary" @onclick="ReloadAsync" disabled="@_loading">
+        @if (_loading)
+        {
+            <span class="spinner spinner-sm" aria-hidden="true"></span><span>Loading…</span>
+        }
+        else
+        {
+            <span>Refresh</span>
+        }
+    </button>
+</div>
 
-@if (_skuModalOpen)
+@if (_products is null)
 {
-    <div class="modal-backdrop" @onclick="CloseSkuModal"></div>
-    <div class="modal-panel" @onclick:stopPropagation="true">
-        <div class="modal-header">
-            <h2 class="modal-title">Add size to model</h2>
-            <button type="button" class="btn-link modal-close" aria-label="Close" @onclick="CloseSkuModal">✕</button>
-        </div>
-        <div class="modal-body">
-            @if (_skuModalLastSku is null)
+    <p class="loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading…</p>
+}
+else
+{
+    <div class="table-wrap">
+        <table class="stock-table">
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th>Buy</th>
+                <th>Sell</th>
+                <th>Barcode</th>
+                <th>Label</th>
+                <th>Stock</th>
+                @if (IsAdmin)
+                {
+                    <th>Actions</th>
+                }
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var row in Filtered)
             {
-                <EditForm Model="_skuModal" OnValidSubmit="SubmitSkuModalAsync">
-                    <div class="field">
-                        <label for="sku-modal-model">Model</label>
-                        <InputSelect id="sku-modal-model" class="input" @bind-Value="_skuModal.ProductModelId">
-                            @foreach (var m in _models ?? Enumerable.Empty<ProductModelSummaryDto>())
-                            {
-                                <option value="@m.Id">@m.Name (@m.SkuCount sizes)</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="field">
-                        <label for="sku-modal-size">Size</label>
-                        <InputSelect id="sku-modal-size" class="input" @bind-Value="_skuModal.Size">
-                            @foreach (var s in _sizes)
-                            {
-                                <option value="@s">@s</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="field">
-                        <label for="sku-modal-stock">Initial stock</label>
-                        <InputNumber id="sku-modal-stock" class="input" @bind-Value="_skuModal.Stock" />
-                    </div>
-                    <p class="muted field-hint">Prices are set once per product — use Edit prices on the model.</p>
-                    <button type="submit" class="btn primary" disabled="@_busySkuModal">
-                        @if (_busySkuModal)
+                <tr class="@RowClass(row)">
+                    <td>@row.Name</td>
+                    <td>@MoneyFormat.Format(row.BuyPrice, StoreSettings.CurrencyLabel)</td>
+                    <td>
+                        @if (Pricing.IsOnSale(row.UnitPrice, row.SalePrice))
                         {
-                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                            <span class="price-strike">@MoneyFormat.Format(row.UnitPrice, StoreSettings.CurrencyLabel)</span>
+                            <strong class="price-sale">@MoneyFormat.Format(row.SalePrice!.Value, StoreSettings.CurrencyLabel)</strong>
                         }
-                        @(_busySkuModal ? "Saving…" : "Create SKU")
-                    </button>
-                </EditForm>
+                        else
+                        {
+                            @MoneyFormat.Format(row.UnitPrice, StoreSettings.CurrencyLabel)
+                        }
+                    </td>
+                    <td class="mono">@row.Barcode</td>
+                    <td class="stock-barcode-cell">
+                        @if (!string.IsNullOrEmpty(row.BarcodePngBase64))
+                        {
+                            <img src="@($"data:image/png;base64,{row.BarcodePngBase64}")" class="stock-barcode-thumb" alt="" />
+                        }
+                        <button type="button" class="btn-link stock-print-link" @onclick="() => OpenPrintModal(row)" disabled="@(string.IsNullOrEmpty(row.Barcode))">Print</button>
+                    </td>
+                    <td>
+                        @if (IsAdmin && _editingProductId == row.Id)
+                        {
+                            <input type="number"
+                                   class="input inline-num"
+                                   min="0"
+                                   @bind="_editQuantity"
+                                   @bind:event="oninput"
+                                   @onkeydown="e => OnStockEditKeydownAsync(e, row.Id)" />
+                        }
+                        else if (IsAdmin)
+                        {
+                            <button type="button" class="btn-link stock-qty-hit" @onclick="() => StartEdit(row)" disabled="@(_editingProductId != null)">
+                                @row.Stock
+                            </button>
+                        }
+                        else
+                        {
+                            @row.Stock
+                        }
+                    </td>
+                    @if (IsAdmin)
+                    {
+                        <td class="stock-actions">
+                            <button type="button" class="btn secondary btn-sm" disabled="@(_addingProductId == row.Id)" @onclick="() => AddStockAsync(row)">
+                                @(_addingProductId == row.Id ? "…" : "+ Add")
+                            </button>
+                            <input type="number" class="input inline-num stock-add-qty" min="1" value="@GetAddQty(row.Id)" @onchange="e => OnAddQtyChange(row.Id, e)" />
+                            <button type="button" class="btn-link" @onclick="() => OpenPriceModal(row)">Prices</button>
+                            <button type="button" class="btn-link" @onclick="() => OpenRenameModal(row)">Rename</button>
+                            <button type="button" class="btn-link danger-link" disabled="@(_deletingProductId == row.Id)" @onclick="() => DeleteProductAsync(row)">@(_deletingProductId == row.Id ? "…" : "Delete")</button>
+                        </td>
+                    }
+                </tr>
             }
-            else
-            {
-                <p class="mono">@_skuModalLastSku.Barcode</p>
-                <div class="barcode-block">
-                    <img src="@($"data:image/png;base64,{_skuModalLastSku.BarcodePngBase64}")" class="barcode-img" alt="Barcode" />
-                </div>
-                <div class="modal-actions">
-                    <button type="button" class="btn secondary" @onclick="() => PrintAsync(_skuModalLastSku.BarcodePngBase64)">Print barcode</button>
-                    <button type="button" class="btn primary" @onclick="CloseSkuModal">Done</button>
-                </div>
-            }
-        </div>
+            </tbody>
+        </table>
     </div>
 }
 
-@if (_modelModalOpen)
+@if (_printModalOpen && _printRow is not null)
 {
-    <div class="modal-backdrop" @onclick="CloseModelModal"></div>
+    <div class="modal-backdrop" @onclick="ClosePrintModal"></div>
     <div class="modal-panel" @onclick:stopPropagation="true">
         <div class="modal-header">
-            <h2 class="modal-title">Rename product</h2>
-            <button type="button" class="btn-link modal-close" aria-label="Close" @onclick="CloseModelModal">✕</button>
+            <h2 class="modal-title">Print barcodes</h2>
+            <button type="button" class="btn-link modal-close" aria-label="Close" @onclick="ClosePrintModal">✕</button>
         </div>
         <div class="modal-body">
-            <EditForm Model="_modelModal" OnValidSubmit="SubmitModelModalAsync">
-                <div class="field">
-                    <label for="model-modal-name">Name</label>
-                    <InputText id="model-modal-name" class="input" @bind-Value="_modelModal.Name" autocomplete="off" />
-                </div>
-                <div class="field">
-                    <label for="model-modal-desc">Description (optional)</label>
-                    <InputTextArea id="model-modal-desc" class="input" rows="3" @bind-Value="_modelModal.Description" />
-                </div>
-                <button type="submit" class="btn primary" disabled="@_busyModelModal">
-                    @if (_busyModelModal)
+            <p class="muted print-modal-summary">
+                <strong>@_printRow.Name</strong> · <span class="mono">@_printRow.Barcode</span>
+            </p>
+            <div class="field">
+                <label for="product-print-qty">How many labels?</label>
+                <input id="product-print-qty" type="number" class="input" min="1" max="500" @bind="_printCount" @onkeydown="OnPrintModalKeyAsync" />
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn primary touch-target" @onclick="ConfirmPrintAsync" disabled="@_printBusy">
+                    @if (_printBusy)
                     {
                         <span class="spinner spinner-sm" aria-hidden="true"></span>
                     }
-                    @(_busyModelModal ? "Saving…" : "Save")
+                    Print
                 </button>
-            </EditForm>
+                <button type="button" class="btn secondary touch-target" @onclick="ClosePrintModal" disabled="@_printBusy">Cancel</button>
+            </div>
         </div>
     </div>
 }
@@ -287,57 +256,399 @@
                 <div class="field">
                     <label for="price-modal-sale">Sale price (@StoreSettings.CurrencyLabel, optional)</label>
                     <InputNumber id="price-modal-sale" class="input" @bind-Value="_priceModal.SalePrice" />
-                    <p class="muted field-hint">Leave empty to remove the sale. Stickers show this price with the original crossed out.</p>
                 </div>
-                <button type="submit" class="btn primary" disabled="@_busyPriceModal">
-                    @if (_busyPriceModal)
-                    {
-                        <span class="spinner spinner-sm" aria-hidden="true"></span>
-                    }
-                    @(_busyPriceModal ? "Saving…" : "Save price")
-                </button>
+                <button type="submit" class="btn primary" disabled="@_busyPriceModal">Save prices</button>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_renameModalOpen)
+{
+    <div class="modal-backdrop" @onclick="CloseRenameModal"></div>
+    <div class="modal-panel" @onclick:stopPropagation="true">
+        <div class="modal-header">
+            <h2 class="modal-title">Rename product</h2>
+            <button type="button" class="btn-link modal-close" aria-label="Close" @onclick="CloseRenameModal">✕</button>
+        </div>
+        <div class="modal-body">
+            <EditForm Model="_renameModal" OnValidSubmit="SubmitRenameModalAsync">
+                <div class="field">
+                    <label for="rename-name">Name</label>
+                    <InputText id="rename-name" class="input" @bind-Value="_renameModal.Name" autocomplete="off" />
+                </div>
+                <button type="submit" class="btn primary" disabled="@_busyRenameModal">Save</button>
             </EditForm>
         </div>
     </div>
 }
 
 @code {
-    private static readonly ClothingSize[] _sizes = Enum.GetValues<ClothingSize>();
+    private bool IsAdmin => string.Equals(App.Role, nameof(UserRole.Admin), StringComparison.OrdinalIgnoreCase);
 
-    private List<ProductModelSummaryDto>? _models;
-    private readonly Dictionary<int, List<ProductSkuListRowDto>> _skusByModel = new();
-    private readonly HashSet<int> _expanded = new();
-    private readonly Dictionary<int, string> _skuLoadError = new();
-    private string? _printBarcode;
-    private int? _deletingSkuId;
-    private int? _deletingModelId;
+    private List<ProductModelSummaryDto>? _products;
+    private string _nameFilter = "";
+    private string? _error;
+    private bool _loading;
+    private bool _reloading;
+    private bool _showAddForm;
+    private bool _busyAdd;
+    private bool _exportBusy;
+    private bool _importBusy;
+    private int _lowStockThreshold = 5;
 
-    private bool _showAddModelForm;
-    private bool _modelModalOpen;
-    private bool _busyModelModal;
-    private readonly ModelModalForm _modelModal = new();
-    private bool _skuModalOpen;
-    private bool _busySkuModal;
-    private readonly SkuModalForm _skuModal = new();
+    private int? _editingProductId;
+    private int? _addingProductId;
+    private int? _deletingProductId;
+    private int _editQuantity;
+    private readonly Dictionary<int, int> _addQtyByProduct = new();
+
+    private bool _printModalOpen;
+    private bool _printBusy;
+    private ProductModelSummaryDto? _printRow;
+    private int _printCount = 1;
 
     private bool _priceModalOpen;
     private bool _busyPriceModal;
     private readonly PriceModalForm _priceModal = new();
 
-    private readonly NewModelForm _newModel = new();
+    private bool _renameModalOpen;
+    private bool _busyRenameModal;
+    private readonly RenameModalForm _renameModal = new();
 
-    private SkuDetailDto? _skuModalLastSku;
-    private string? _error;
-    private bool _busyModel;
-    private bool _reloadingCatalog;
-    private bool _exportBusy;
-    private bool _importBusy;
+    private readonly NewProductForm _newProduct = new();
 
-    protected override async Task OnInitializedAsync() => await ReloadModelsAsync();
+    private IEnumerable<ProductModelSummaryDto> Filtered =>
+        string.IsNullOrWhiteSpace(_nameFilter)
+            ? _products ?? Enumerable.Empty<ProductModelSummaryDto>()
+            : (_products ?? Enumerable.Empty<ProductModelSummaryDto>())
+                .Where(r => r.Name.Contains(_nameFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private string? RowClass(ProductModelSummaryDto row)
+    {
+        if (row.Stock == 0)
+            return "stock-zero";
+        if (_lowStockThreshold > 0 && row.Stock < _lowStockThreshold)
+            return "stock-low";
+        return null;
+    }
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _error = null;
+        _loading = true;
+        _reloading = _products is not null;
+        _editingProductId = null;
+        try
+        {
+            var settings = await Http.GetFromJsonAsync<PosSettingsDto>("api/settings", AppJson.Options);
+            _lowStockThreshold = settings?.LowStockThreshold ?? 5;
+            _products = await Http.GetFromJsonAsync<List<ProductModelSummaryDto>>("api/products", AppJson.Options) ?? new();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _products ??= new();
+        }
+        finally
+        {
+            _loading = false;
+            _reloading = false;
+        }
+    }
+
+    private async Task CreateProductAsync()
+    {
+        _error = null;
+        _busyAdd = true;
+        try
+        {
+            var body = new CreateProductModelRequest(
+                _newProduct.Name.Trim(),
+                null,
+                Math.Max(0, _newProduct.BuyPrice),
+                Math.Max(0, _newProduct.UnitPrice),
+                _newProduct.SalePrice,
+                Math.Max(0, _newProduct.InitialStock));
+            using var resp = await Http.PostAsJsonAsync("api/products", body, AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not save product." : _error);
+                return;
+            }
+
+            _newProduct.Name = "";
+            _newProduct.BuyPrice = 0;
+            _newProduct.UnitPrice = 0;
+            _newProduct.SalePrice = null;
+            _newProduct.InitialStock = 0;
+            _showAddForm = false;
+            Toasts.Success("Product saved");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _busyAdd = false;
+        }
+    }
+
+    private void StartEdit(ProductModelSummaryDto row)
+    {
+        _editingProductId = row.Id;
+        _editQuantity = row.Stock;
+    }
+
+    private void CancelEdit() => _editingProductId = null;
+
+    private async Task OnStockEditKeydownAsync(KeyboardEventArgs e, int productId)
+    {
+        if (e.Key == "Enter")
+            await SaveStockAsync(productId);
+        else if (e.Key == "Escape")
+            CancelEdit();
+    }
+
+    private async Task SaveStockAsync(int productId)
+    {
+        if (_editQuantity < 0)
+        {
+            _error = "Stock cannot be negative.";
+            return;
+        }
+
+        _error = null;
+        try
+        {
+            using var resp = await Http.PutAsJsonAsync($"api/products/{productId}/stock", new SetStockRequest(_editQuantity), AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(_error ?? "Save failed.");
+                return;
+            }
+
+            _editingProductId = null;
+            Toasts.Success("Stock saved");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+    }
+
+    private int GetAddQty(int productId) => _addQtyByProduct.TryGetValue(productId, out var q) ? q : 1;
+
+    private void OnAddQtyChange(int productId, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var n))
+            _addQtyByProduct[productId] = Math.Max(1, n);
+    }
+
+    private async Task AddStockAsync(ProductModelSummaryDto row)
+    {
+        var qty = GetAddQty(row.Id);
+        _addingProductId = row.Id;
+        try
+        {
+            using var resp = await Http.PostAsJsonAsync($"api/products/{row.Id}/stock/add", new AdjustStockRequest(qty), AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(_error ?? "Could not add stock.");
+                return;
+            }
+
+            Toasts.Success("Stock updated");
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+        }
+        finally
+        {
+            _addingProductId = null;
+        }
+    }
+
+    private void OpenPrintModal(ProductModelSummaryDto row)
+    {
+        _printRow = row;
+        _printCount = 1;
+        _printModalOpen = true;
+    }
+
+    private void ClosePrintModal()
+    {
+        _printModalOpen = false;
+        _printRow = null;
+        _printBusy = false;
+    }
+
+    private async Task OnPrintModalKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await ConfirmPrintAsync();
+        else if (e.Key == "Escape")
+            ClosePrintModal();
+    }
+
+    private async Task ConfirmPrintAsync()
+    {
+        if (_printRow is null || string.IsNullOrEmpty(_printRow.Barcode))
+            return;
+
+        var count = Math.Clamp(_printCount, 1, 500);
+        _printCount = count;
+        _printBusy = true;
+        await BarcodePrint.BeginBrowserPrintAsync();
+        try
+        {
+            var key = Uri.EscapeDataString(_printRow.Barcode);
+            var detail = await Http.GetFromJsonAsync<SkuDetailDto>($"api/skus/{key}?forLabelPrint=true", AppJson.Options);
+            var png = detail?.BarcodePngBase64;
+            if (string.IsNullOrEmpty(png))
+            {
+                _error = "Could not load barcode image for printing.";
+                Toasts.Error(_error);
+                await BarcodePrint.CancelBrowserPrintAsync();
+                return;
+            }
+
+            var (ok, usedNative, printError) = await BarcodePrint.PrintAsync(png, count);
+            if (!ok)
+            {
+                _error = printError ?? "Print failed.";
+                Toasts.Error(_error);
+            }
+            else
+            {
+                Toasts.Success(usedNative
+                    ? $"Sent {count} label{(count == 1 ? "" : "s")} to barcode printer"
+                    : $"Printing {count} label{(count == 1 ? "" : "s")}");
+                ClosePrintModal();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Error(ex.Message);
+            await BarcodePrint.CancelBrowserPrintAsync();
+        }
+        finally
+        {
+            _printBusy = false;
+        }
+    }
+
+    private void OpenPriceModal(ProductModelSummaryDto row)
+    {
+        _priceModal.ProductId = row.Id;
+        _priceModal.Title = row.Name;
+        _priceModal.BuyPrice = row.BuyPrice;
+        _priceModal.UnitPrice = row.UnitPrice;
+        _priceModal.SalePrice = row.SalePrice;
+        _priceModalOpen = true;
+    }
+
+    private void ClosePriceModal() => _priceModalOpen = false;
+
+    private async Task SubmitPriceModalAsync()
+    {
+        _busyPriceModal = true;
+        try
+        {
+            var body = new UpdateProductPriceRequest(Math.Max(0, _priceModal.BuyPrice), Math.Max(0, _priceModal.UnitPrice), _priceModal.SalePrice);
+            using var resp = await Http.PutAsJsonAsync($"api/products/{_priceModal.ProductId}/price", body, AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(_error ?? "Could not save prices.");
+                return;
+            }
+
+            Toasts.Success("Prices saved");
+            _priceModalOpen = false;
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busyPriceModal = false;
+        }
+    }
+
+    private void OpenRenameModal(ProductModelSummaryDto row)
+    {
+        _renameModal.ProductId = row.Id;
+        _renameModal.Name = row.Name;
+        _renameModalOpen = true;
+    }
+
+    private void CloseRenameModal() => _renameModalOpen = false;
+
+    private async Task SubmitRenameModalAsync()
+    {
+        _busyRenameModal = true;
+        try
+        {
+            var body = new UpdateProductModelRequest(_renameModal.Name.Trim(), null);
+            using var resp = await Http.PutAsJsonAsync($"api/products/{_renameModal.ProductId}", body, AppJson.Options);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(_error ?? "Could not rename.");
+                return;
+            }
+
+            Toasts.Success("Product renamed");
+            _renameModalOpen = false;
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busyRenameModal = false;
+        }
+    }
+
+    private async Task DeleteProductAsync(ProductModelSummaryDto row)
+    {
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", $"Delete \"{row.Name}\"? This cannot be undone.");
+        if (!ok)
+            return;
+
+        _deletingProductId = row.Id;
+        try
+        {
+            using var resp = await Http.DeleteAsync($"api/products/{row.Id}");
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = await resp.Content.ReadAsStringAsync();
+                Toasts.Error(_error ?? "Delete failed.");
+                return;
+            }
+
+            Toasts.Success("Product deleted");
+            await ReloadAsync();
+        }
+        finally
+        {
+            _deletingProductId = null;
+        }
+    }
 
     private async Task ExportCatalogAsync()
     {
-        _error = null;
         _exportBusy = true;
         try
         {
@@ -345,17 +656,11 @@
             var fname = $"catalog-export-{DateTime.UtcNow:yyyyMMdd}.json";
             var b64 = Convert.ToBase64String(bytes);
             var ok = await Js.InvokeAsync<bool>("storeDownloadFile", fname, b64, "application/json");
-            if (!ok)
-            {
-                _error = "Download did not start.";
-                Toasts.Error(_error);
-            }
-            else
+            if (ok)
                 Toasts.Success("Catalog exported");
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
             Toasts.Error(ex.Message);
         }
         finally
@@ -370,18 +675,14 @@
         if (file is null)
             return;
 
-        var ok = await Js.InvokeAsync<bool>(
-            "storePosConfirm",
-            "Import products from this file? New products/sizes get stock 0. Existing sizes keep their stock. Sales history is not changed.");
+        var ok = await Js.InvokeAsync<bool>("storePosConfirm", "Import products from this file?");
         if (!ok)
             return;
 
-        _error = null;
         _importBusy = true;
         try
         {
-            const long maxBytes = 10L * 1024 * 1024;
-            await using var stream = file.OpenReadStream(maxBytes);
+            await using var stream = file.OpenReadStream(10L * 1024 * 1024);
             using var content = new MultipartFormDataContent();
             var fileContent = new StreamContent(stream);
             fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/json");
@@ -389,27 +690,17 @@
 
             using var resp = await Http.PostAsync("api/products/import", content);
             var result = await resp.Content.ReadFromJsonAsync<CatalogImportResultDto>(AppJson.Options);
-            if (result is null)
+            if (!resp.IsSuccessStatusCode || result is null || !result.Success)
             {
-                Toasts.Error("Invalid response from server.");
-                return;
-            }
-
-            if (!resp.IsSuccessStatusCode || !result.Success)
-            {
-                _error = result.Message;
-                Toasts.Error(_error);
+                Toasts.Error(result?.Message ?? "Import failed.");
                 return;
             }
 
             Toasts.Success(result.Message);
-            _skusByModel.Clear();
-            _expanded.Clear();
-            await ReloadModelsAsync();
+            await ReloadAsync();
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
             Toasts.Error(ex.Message);
         }
         finally
@@ -418,411 +709,27 @@
         }
     }
 
-    private async Task ReloadModelsAsync()
-    {
-        _error = null;
-        _reloadingCatalog = _models is not null;
-        await InvokeAsync(StateHasChanged);
-        try
-        {
-            _models = await Http.GetFromJsonAsync<List<ProductModelSummaryDto>>("api/products", AppJson.Options) ?? new();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _models ??= new();
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _reloadingCatalog = false;
-        }
-    }
-
-    private void OpenAddSkuModal(int? modelId)
-    {
-        _error = null;
-        _skuModalLastSku = null;
-        _skuModal.ProductModelId = modelId ?? _models?.FirstOrDefault()?.Id ?? 0;
-        _skuModal.Size = ClothingSize.M;
-        _skuModal.Stock = 0;
-        _skuModalOpen = true;
-    }
-
-    private void CloseSkuModal()
-    {
-        _skuModalOpen = false;
-        _skuModalLastSku = null;
-        _busySkuModal = false;
-    }
-
-    private async Task SubmitSkuModalAsync()
-    {
-        if (_skuModal.ProductModelId <= 0)
-        {
-            _error = "Select a product model.";
-            return;
-        }
-
-        _error = null;
-        _busySkuModal = true;
-        try
-        {
-            var body = new CreateSkuRequest(_skuModal.ProductModelId, _skuModal.Size, Math.Max(0, _skuModal.Stock));
-            using var resp = await Http.PostAsJsonAsync("api/skus", body, AppJson.Options);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not create SKU." : _error);
-                return;
-            }
-
-            var created = await resp.Content.ReadFromJsonAsync<SkuDetailDto>(AppJson.Options);
-            _skuModalLastSku = created;
-            Toasts.Success("SKU created");
-            await ReloadModelsAsync();
-            var mid = _skuModal.ProductModelId;
-            if (_expanded.Contains(mid))
-            {
-                _skusByModel.Remove(mid);
-                await LoadSkusAsync(mid);
-            }
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _busySkuModal = false;
-        }
-    }
-
-    private async Task CreateModelAsync()
-    {
-        _error = null;
-        _busyModel = true;
-        try
-        {
-            var body = new CreateProductModelRequest(
-                _newModel.Name.Trim(),
-                string.IsNullOrWhiteSpace(_newModel.Description) ? null : _newModel.Description.Trim(),
-                Math.Max(0, _newModel.BuyPrice),
-                Math.Max(0, _newModel.UnitPrice),
-                _newModel.SalePrice);
-            using var resp = await Http.PostAsJsonAsync("api/products", body, AppJson.Options);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not save model." : _error);
-                return;
-            }
-
-            _newModel.Name = "";
-            _newModel.Description = "";
-            _newModel.BuyPrice = 0;
-            _newModel.UnitPrice = 0;
-            _newModel.SalePrice = null;
-            _showAddModelForm = false;
-            Toasts.Success("Product model saved");
-            await ReloadModelsAsync();
-            _skusByModel.Clear();
-            _expanded.Clear();
-            _skuLoadError.Clear();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _busyModel = false;
-        }
-    }
-
-    private async Task ToggleAsync(int modelId)
-    {
-        if (!_expanded.Add(modelId))
-        {
-            _expanded.Remove(modelId);
-            return;
-        }
-
-        _skuLoadError.Remove(modelId);
-        if (!_skusByModel.ContainsKey(modelId))
-            await LoadSkusAsync(modelId);
-    }
-
-    private async Task LoadSkusAsync(int modelId)
-    {
-        try
-        {
-            var rows = await Http.GetFromJsonAsync<List<ProductSkuListRowDto>>($"api/products/{modelId}/skus", AppJson.Options) ?? new();
-            _skusByModel[modelId] = rows;
-            _skuLoadError.Remove(modelId);
-        }
-        catch (Exception ex)
-        {
-            _skuLoadError[modelId] = ex.Message;
-        }
-
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private async Task DeleteSkuAsync(int modelId, ProductSkuListRowDto row)
-    {
-        var ok = await Js.InvokeAsync<bool>("storePosConfirm", $"Delete SKU {row.Size} — {row.Barcode}?");
-        if (!ok)
-            return;
-
-        _error = null;
-        _deletingSkuId = row.Id;
-        await InvokeAsync(StateHasChanged);
-        try
-        {
-            using var resp = await Http.DeleteAsync($"api/skus/{row.Id}");
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Delete failed." : _error);
-                return;
-            }
-
-            _skusByModel.Remove(modelId);
-            Toasts.Success("SKU deleted");
-            await ReloadModelsAsync();
-            if (_expanded.Contains(modelId))
-                await LoadSkusAsync(modelId);
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _deletingSkuId = null;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private void OpenModelModal(ProductModelSummaryDto model)
-    {
-        _error = null;
-        _modelModal.Id = model.Id;
-        _modelModal.Name = model.Name;
-        _modelModal.Description = model.Description ?? "";
-        _modelModalOpen = true;
-    }
-
-    private void CloseModelModal()
-    {
-        _modelModalOpen = false;
-        _busyModelModal = false;
-    }
-
-    private async Task SubmitModelModalAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_modelModal.Name))
-        {
-            _error = "Name is required.";
-            return;
-        }
-
-        _error = null;
-        _busyModelModal = true;
-        try
-        {
-            var body = new UpdateProductModelRequest(_modelModal.Name.Trim(), string.IsNullOrWhiteSpace(_modelModal.Description) ? null : _modelModal.Description.Trim());
-            using var resp = await Http.PutAsJsonAsync($"api/products/{_modelModal.Id}", body, AppJson.Options);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not save product." : _error);
-                return;
-            }
-
-            Toasts.Success("Product updated");
-            _modelModalOpen = false;
-            await ReloadModelsAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _busyModelModal = false;
-        }
-    }
-
-    private async Task DeleteModelAsync(ProductModelSummaryDto model)
-    {
-        var ok = await Js.InvokeAsync<bool>("storePosConfirm", $"Delete product \"{model.Name}\" and all its sizes? This cannot be undone.");
-        if (!ok)
-            return;
-
-        _error = null;
-        _deletingModelId = model.Id;
-        await InvokeAsync(StateHasChanged);
-        try
-        {
-            using var resp = await Http.DeleteAsync($"api/products/{model.Id}");
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Delete failed." : _error);
-                return;
-            }
-
-            _expanded.Remove(model.Id);
-            _skusByModel.Remove(model.Id);
-            Toasts.Success("Product deleted");
-            await ReloadModelsAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _deletingModelId = null;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private void OpenPriceModal(ProductModelSummaryDto model)
-    {
-        _error = null;
-        _priceModal.ModelId = model.Id;
-        _priceModal.Title = model.Name;
-        _priceModal.BuyPrice = model.BuyPrice;
-        _priceModal.UnitPrice = model.UnitPrice;
-        _priceModal.SalePrice = model.SalePrice;
-        _priceModalOpen = true;
-    }
-
-    private void ClosePriceModal()
-    {
-        _priceModalOpen = false;
-        _busyPriceModal = false;
-    }
-
-    private async Task SubmitPriceModalAsync()
-    {
-        _error = null;
-        _busyPriceModal = true;
-        try
-        {
-            var body = new UpdateProductPriceRequest(Math.Max(0, _priceModal.BuyPrice), Math.Max(0, _priceModal.UnitPrice), _priceModal.SalePrice);
-            using var resp = await Http.PutAsJsonAsync($"api/products/{_priceModal.ModelId}/price", body, AppJson.Options);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                Toasts.Error(string.IsNullOrWhiteSpace(_error) ? "Could not save price." : _error);
-                return;
-            }
-
-            Toasts.Success("Prices saved");
-            _priceModalOpen = false;
-            await ReloadModelsAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Error(ex.Message);
-        }
-        finally
-        {
-            _busyPriceModal = false;
-        }
-    }
-
-    private async Task PrintBarcodeForRowAsync(string barcode)
-    {
-        _error = null;
-        _printBarcode = barcode;
-        await InvokeAsync(StateHasChanged);
-        try
-        {
-            var key = Uri.EscapeDataString(barcode);
-            using var resp = await Http.GetAsync($"api/skus/{key}?forLabelPrint=true");
-            if (!resp.IsSuccessStatusCode)
-            {
-                _error = await resp.Content.ReadAsStringAsync();
-                return;
-            }
-
-            var detail = await resp.Content.ReadFromJsonAsync<SkuDetailDto>(AppJson.Options);
-            if (detail is null || string.IsNullOrEmpty(detail.BarcodePngBase64))
-            {
-                _error = "Could not load barcode image.";
-                return;
-            }
-
-            await PrintAsync(detail.BarcodePngBase64);
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-        finally
-        {
-            _printBarcode = null;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task PrintAsync(string pngBase64)
-    {
-        _error = null;
-        try
-        {
-            var (ok, usedNative, printError) = await BarcodePrint.PrintAsync(pngBase64, 1);
-            if (!ok)
-                _error = printError ?? "Print failed.";
-            else if (usedNative)
-                Toasts.Success("Sent to barcode printer");
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-    }
-
-    private sealed class NewModelForm
+    private sealed class NewProductForm
     {
         public string Name { get; set; } = "";
-        public string? Description { get; set; }
         public decimal BuyPrice { get; set; }
         public decimal UnitPrice { get; set; }
         public decimal? SalePrice { get; set; }
-    }
-
-    private sealed class SkuModalForm
-    {
-        public int ProductModelId { get; set; }
-        public ClothingSize Size { get; set; } = ClothingSize.M;
-        public int Stock { get; set; }
+        public int InitialStock { get; set; }
     }
 
     private sealed class PriceModalForm
     {
-        public int ModelId { get; set; }
+        public int ProductId { get; set; }
         public string Title { get; set; } = "";
         public decimal BuyPrice { get; set; }
         public decimal UnitPrice { get; set; }
         public decimal? SalePrice { get; set; }
     }
 
-    private sealed class ModelModalForm
+    private sealed class RenameModalForm
     {
-        public int Id { get; set; }
+        public int ProductId { get; set; }
         public string Name { get; set; } = "";
-        public string? Description { get; set; }
     }
 }

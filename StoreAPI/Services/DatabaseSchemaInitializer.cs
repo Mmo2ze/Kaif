@@ -1,4 +1,6 @@
+using Microsoft.EntityFrameworkCore;
 using StoreAPI.Data;
+using StoreShared;
 
 namespace StoreAPI.Services;
 
@@ -7,6 +9,10 @@ public static class DatabaseSchemaInitializer
 {
     public static async Task ApplyAsync(StoreDbContext db, CancellationToken cancellationToken = default)
     {
+        var dbPath = ParseDataSourcePath(db.Database.GetDbConnection().ConnectionString);
+        if (dbPath is not null)
+            StoreDataPaths.RemoveCorruptDatabaseIfNeeded(dbPath);
+
         await db.Database.EnsureCreatedAsync(cancellationToken);
         await db.EnsureSkuUnitPriceColumnAsync(cancellationToken);
         await db.EnsureSkuSalePriceColumnAsync(cancellationToken);
@@ -19,5 +25,19 @@ public static class DatabaseSchemaInitializer
         await db.EnsureSaleEventsSchemaAsync(cancellationToken);
         await db.EnsureReceiptContactColumnsAsync(cancellationToken);
         await db.EnsureEan8SkuBarcodesAsync(cancellationToken);
+        await db.EnsurePrimarySkuPerProductAsync(cancellationToken);
+    }
+
+    private static string? ParseDataSourcePath(string? connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return null;
+
+        const string prefix = "Data Source=";
+        var idx = connectionString.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+            return null;
+
+        return connectionString[(idx + prefix.Length)..].Split(';', 2)[0].Trim();
     }
 }

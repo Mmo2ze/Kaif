@@ -12,7 +12,7 @@ export function LoginPage() {
   const [offline, setOffline] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated) navigate(isAdmin ? '/home' : '/seller', { replace: true });
+    if (isAuthenticated) navigate(isAdmin ? '/home' : '/products', { replace: true });
   }, [isAuthenticated, isAdmin, navigate]);
 
   const submit = async () => {
@@ -21,7 +21,7 @@ export function LoginPage() {
     setBusy(true);
     try {
       const me = await login({ username: username.trim(), password });
-      navigate(me.role === 'admin' ? '/home' : '/seller', { replace: true });
+      navigate(me.role === 'admin' ? '/home' : '/products', { replace: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not sign in.';
       if (msg.includes('fetch') || msg.includes('Failed to fetch')) {

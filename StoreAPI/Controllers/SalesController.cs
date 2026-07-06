@@ -203,6 +203,16 @@ public sealed class SalesController : ControllerBase
         var rangeNetRevenue = rangeRevenue - rangeRefunded;
         var todayNetRevenue = todayRevenue - todayRefunded;
 
+        var isSeller = User.IsInRole(nameof(UserRole.Seller));
+        var rangeCost = rangeCostSold - rangeCostRefunded;
+        var todayCost = todayCostSold - todayCostRefunded;
+        var rangeProfit = isSeller
+            ? 0
+            : SalesProfitHelper.NetProfit(rangeNetRevenue, rangeCostSold, rangeCostRefunded);
+        var todayProfit = isSeller
+            ? 0
+            : SalesProfitHelper.NetProfit(todayNetRevenue, todayCostSold, todayCostRefunded);
+
         return Ok(new SalesSummaryDto(
             todayRevenue,
             rangeCount,
@@ -214,10 +224,10 @@ public sealed class SalesController : ControllerBase
             rangeNetRevenue,
             todayRefunded,
             todayNetRevenue,
-            rangeCostSold - rangeCostRefunded,
-            SalesProfitHelper.NetProfit(rangeNetRevenue, rangeCostSold, rangeCostRefunded),
-            todayCostSold - todayCostRefunded,
-            SalesProfitHelper.NetProfit(todayNetRevenue, todayCostSold, todayCostRefunded)));
+            isSeller ? 0 : rangeCost,
+            rangeProfit,
+            isSeller ? 0 : todayCost,
+            todayProfit));
     }
 
     private async Task<decimal> SumRefundsInRangeAsync(
@@ -557,9 +567,22 @@ public sealed class SalesController : ControllerBase
 
         if (User.IsInRole(nameof(UserRole.Seller)))
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            fromUtc = StartOfDayUtc(today);
-            toUtc = EndOfDayUtc(today);
+            if (!DateOnly.TryParse(fromRaw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var from)
+                || !DateOnly.TryParse(toRaw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var to))
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                from = today;
+                to = today;
+            }
+
+            if (from > to)
+            {
+                error = BadRequest("'from' cannot be after 'to'.");
+                return false;
+            }
+
+            fromUtc = StartOfDayUtc(from);
+            toUtc = EndOfDayUtc(to);
             sellerFilter = claimUserId;
             return true;
         }

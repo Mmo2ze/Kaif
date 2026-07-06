@@ -13,14 +13,14 @@
             @if (IsAdmin)
             {
                 <NavLink class="nav-bar-link" href="/products">Products</NavLink>
-                <NavLink class="nav-bar-link" href="/stock">Stock</NavLink>
                 <NavLink class="nav-bar-link" href="/sales">Sales</NavLink>
                 <NavLink class="nav-bar-link" href="/users">Users</NavLink>
                 <NavLink class="nav-bar-link" href="/settings">Settings</NavLink>
             }
             else if (IsSeller)
             {
-                <NavLink class="nav-bar-link" href="/sales">Sales</NavLink>
+                <NavLink class="nav-bar-link" href="/products">Products</NavLink>
+                <NavLink class="nav-bar-link" href="/sales">My sales</NavLink>
             }
         </nav>
     </div>

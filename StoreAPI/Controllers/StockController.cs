@@ -32,14 +32,12 @@ public sealed class StockController : ControllerBase
         var rows = await _db.Skus.AsNoTracking()
             .Include(s => s.ProductModel)
             .OrderBy(s => s.ProductModel!.Name)
-            .ThenBy(s => s.Size)
             .ToListAsync(ct);
 
         var dtos = rows.Select(s => new StockRowDto(
             s.Id,
             s.ProductModelId,
             s.ProductModel?.Name ?? "",
-            s.Size,
             s.Barcode,
             _barcodePng.ToPngBase64(s.Barcode, BarcodeImageKind.Compact),
             s.Stock)).ToList();
@@ -113,7 +111,6 @@ public sealed class StockController : ControllerBase
             a.Id,
             a.SkuId,
             a.Sku?.ProductModel?.Name ?? "",
-            a.Sku?.Size.ToString() ?? "",
             a.Sku?.Barcode ?? "",
             a.QuantityDelta,
             a.Reason,

@@ -1,8 +1,10 @@
 @using System.Runtime.InteropServices
+@using StoreShared
 @inject StoreApiAutoStartService ApiStart
 @inject StoreSettingsService StoreSettings
 @inject AppState App
 @inject HttpClient Http
+@inject LabelPrintQueueWorker LabelPrintWorker
 
 @if (!_apiReady && _startupError is null)
 {
@@ -76,6 +78,7 @@ else
         await StoreSettings.LoadFromApiAsync(Http);
         await VerifyApiFeaturesAsync();
         _apiReady = true;
+        LabelPrintWorker.Start();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -84,7 +87,13 @@ else
         try
         {
             var health = await Http.GetApiJsonAsync<ApiHealthDto>("api/health");
-            if (health?.Features is null || !health.Features.Contains("sales-statistics"))
+            if (health?.LabelRenderVersion is not null &&
+                !string.Equals(health.LabelRenderVersion, StoreBuild.LabelRenderVersion, StringComparison.Ordinal))
+            {
+                App.SetServerWarning(
+                    $"Store server label rendering is outdated ({health.LabelRenderVersion} vs {StoreBuild.LabelRenderVersion}). Quit Store POS completely, then reopen the latest published app.");
+            }
+            else if (health?.Features is null || !health.Features.Contains("sales-statistics"))
             {
                 App.SetServerWarning(
                     "An older StoreAPI is running on port 5050. Statistics, audit log, and backup need the latest StoreAPI — close the old one and restart from your current project build.");
@@ -98,5 +107,5 @@ else
         }
     }
 
-    private sealed record ApiHealthDto(string Status, DateTimeOffset Time, int? ApiVersion, string[]? Features);
+    private sealed record ApiHealthDto(string Status, DateTimeOffset Time, int? ApiVersion, string? LabelRenderVersion, string[]? Features);
 }

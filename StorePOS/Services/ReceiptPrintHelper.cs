@@ -49,7 +49,11 @@ public static class ReceiptPrintHelper
             l.Size,
             l.Quantity,
             l.UnitPrice,
-            l.LineTotal)).ToList();
+            l.LineTotal,
+            l.RegularUnitPrice)).ToList();
+
+        var subtotalBeforeSale = receiptLines.Sum(l => l.Quantity * (l.RegularUnitPrice ?? l.UnitPrice));
+        var saleDiscount = Math.Max(0, subtotalBeforeSale - subtotal);
 
         return new ReceiptDto(
             ReceiptNumber: string.IsNullOrWhiteSpace(receiptNumber)
@@ -64,7 +68,9 @@ public static class ReceiptPrintHelper
             Subtotal: subtotal,
             Discount: discount,
             Tax: 0,
-            Total: total);
+            Total: total,
+            SubtotalBeforeSale: subtotalBeforeSale,
+            SaleDiscount: saleDiscount);
     }
 
     public sealed record ReceiptLineInput(
@@ -72,5 +78,6 @@ public static class ReceiptPrintHelper
         string Size,
         int Quantity,
         decimal UnitPrice,
-        decimal LineTotal);
+        decimal LineTotal,
+        decimal? RegularUnitPrice = null);
 }

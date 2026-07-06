@@ -21,6 +21,8 @@ public sealed class StoreRuntimeSettings
 
     public bool AllowSellerDiscount { get; private set; }
 
+    public string ReceiptAddress { get; private set; } = "";
+
     public string ReceiptLandline { get; private set; } = "";
 
     public string ReceiptPhone { get; private set; } = "";
@@ -33,6 +35,7 @@ public sealed class StoreRuntimeSettings
                 CurrencyLabel,
                 AllowSellerDiscount,
                 LowStockThreshold,
+                string.IsNullOrWhiteSpace(ReceiptAddress) ? null : ReceiptAddress,
                 string.IsNullOrWhiteSpace(ReceiptLandline) ? null : ReceiptLandline,
                 string.IsNullOrWhiteSpace(ReceiptPhone) ? null : ReceiptPhone);
     }
@@ -51,6 +54,7 @@ public sealed class StoreRuntimeSettings
             CurrencyLabel = row.CurrencyLabel;
             LowStockThreshold = row.LowStockThreshold;
             AllowSellerDiscount = row.AllowSellerDiscount;
+            ReceiptAddress = row.ReceiptAddress ?? "";
             ReceiptLandline = row.ReceiptLandline ?? "";
             ReceiptPhone = row.ReceiptPhone ?? "";
         }

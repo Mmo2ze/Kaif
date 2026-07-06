@@ -84,6 +84,8 @@ public sealed class RefundService
             return Fail("This receipt has already been fully refunded");
 
         var refundedBySku = await GetRefundedQuantitiesAsync(sale.Id, ct);
+        var refundedAmountBySku = await GetRefundedAmountsBySkuAsync(sale.Id, ct);
+        var refundPricingBySku = BuildRefundPricingBySku(sale);
         var linesToRefund = new List<(SaleItem Item, int Qty, decimal LineTotal)>();
 
         if (request.Type == RefundType.Full)
@@ -94,7 +96,16 @@ public sealed class RefundService
                 var available = item.Quantity - already;
                 if (available <= 0)
                     continue;
-                linesToRefund.Add((item, available, item.UnitPrice * available));
+                var pricing = refundPricingBySku[item.SKUId];
+                var alreadyQty = refundedBySku.GetValueOrDefault(item.SKUId);
+                var alreadyAmount = refundedAmountBySku.GetValueOrDefault(item.SKUId);
+                var lineTotal = RefundPricingCalculator.ComputeRefundAmount(
+                    pricing.NetLineTotal,
+                    item.Quantity,
+                    available,
+                    alreadyQty,
+                    alreadyAmount);
+                linesToRefund.Add((item, available, lineTotal));
             }
 
             if (linesToRefund.Count == 0)
@@ -119,7 +130,16 @@ public sealed class RefundService
                 if (reqLine.QuantityToRefund > available)
                     return Fail($"Quantity exceeds available to refund for {item.SKU?.ProductModel?.Name ?? "item"} (max {available}).");
 
-                linesToRefund.Add((item, reqLine.QuantityToRefund, item.UnitPrice * reqLine.QuantityToRefund));
+                var pricing = refundPricingBySku[item.SKUId];
+                var alreadyQty = refundedBySku.GetValueOrDefault(item.SKUId);
+                var alreadyAmount = refundedAmountBySku.GetValueOrDefault(item.SKUId);
+                var lineTotal = RefundPricingCalculator.ComputeRefundAmount(
+                    pricing.NetLineTotal,
+                    item.Quantity,
+                    reqLine.QuantityToRefund,
+                    alreadyQty,
+                    alreadyAmount);
+                linesToRefund.Add((item, reqLine.QuantityToRefund, lineTotal));
             }
         }
 
@@ -131,7 +151,7 @@ public sealed class RefundService
                      || e.EventType == nameof(SaleEventType.FullRefund)),
             ct);
 
-        // First full refund uses sale total (discount applied); later full/partial use line totals.
+        // Refund line totals are based on the paid amount after sale-level discount allocation.
         decimal amountRefunded = request.Type == RefundType.Full && partialCount == 0
             ? sale.TotalAmount
             : grossRefund;
@@ -233,6 +253,25 @@ public sealed class RefundService
         return map;
     }
 
+    public async Task<Dictionary<int, decimal>> GetRefundedAmountsBySkuAsync(int saleId, CancellationToken ct = default)
+    {
+        var refundEvents = await _db.SaleEvents.AsNoTracking()
+            .Where(e => e.SaleId == saleId
+                        && (e.EventType == nameof(SaleEventType.FullRefund)
+                            || e.EventType == nameof(SaleEventType.PartialRefund)))
+            .Include(e => e.Lines)
+            .ToListAsync(ct);
+
+        var map = new Dictionary<int, decimal>();
+        foreach (var ev in refundEvents)
+        {
+            foreach (var line in ev.Lines)
+                map[line.SkuId] = map.GetValueOrDefault(line.SkuId) + line.LineTotal;
+        }
+
+        return map;
+    }
+
     public async Task<decimal> GetTotalRefundedAsync(int saleId, CancellationToken ct = default) =>
         await _db.SaleEvents.AsNoTracking()
             .Where(e => e.SaleId == saleId
@@ -249,9 +288,20 @@ public sealed class RefundService
     private async Task<SaleByReceiptDto> MapSaleByReceiptAsync(Sale sale, CancellationToken ct)
     {
         var refunded = await GetRefundedQuantitiesAsync(sale.Id, ct);
+        var refundedAmounts = await GetRefundedAmountsBySkuAsync(sale.Id, ct);
+        var refundPricingBySku = BuildRefundPricingBySku(sale);
         var lines = sale.Items.OrderBy(i => i.Id).Select(i =>
         {
             var already = refunded.GetValueOrDefault(i.SKUId);
+            var alreadyAmount = refundedAmounts.GetValueOrDefault(i.SKUId);
+            var available = i.Quantity - already;
+            var pricing = refundPricingBySku[i.SKUId];
+            var refundLineTotal = RefundPricingCalculator.ComputeRefundAmount(
+                pricing.NetLineTotal,
+                i.Quantity,
+                available,
+                already,
+                alreadyAmount);
             return new SaleLineRefundableDto(
                 i.SKUId,
                 i.SKU?.ProductModel?.Name ?? "—",
@@ -259,9 +309,13 @@ public sealed class RefundService
                 i.SKU?.Barcode ?? "",
                 i.Quantity,
                 already,
-                i.Quantity - already,
+                available,
                 i.UnitPrice,
-                i.UnitPrice * i.Quantity);
+                i.UnitPrice * i.Quantity,
+                pricing.NetLineTotal,
+                alreadyAmount,
+                pricing.RefundUnitPrice,
+                refundLineTotal);
         }).ToList();
 
         return new SaleByReceiptDto(
@@ -293,6 +347,17 @@ public sealed class RefundService
                 l.Quantity,
                 l.UnitPrice,
                 l.LineTotal)).ToList());
+
+    private static Dictionary<int, RefundLinePricing> BuildRefundPricingBySku(Sale sale)
+    {
+        var items = sale.Items.OrderBy(i => i.Id)
+            .Select(i => (i.SKUId, i.Quantity, i.UnitPrice))
+            .ToList();
+        var pricing = RefundPricingCalculator.BuildLinePricing(items, sale.DiscountAmount, sale.TotalAmount);
+        return pricing.ToDictionary(p => p.SkuId, p => new RefundLinePricing(p.RefundUnitPrice, p.NetLineTotal));
+    }
+
+    private sealed record RefundLinePricing(decimal RefundUnitPrice, decimal NetLineTotal);
 
     private static RefundResultDto Fail(string error) =>
         new(false, error, 0, "");

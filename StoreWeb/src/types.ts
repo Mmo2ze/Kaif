@@ -18,6 +18,7 @@ export interface CurrentUserDto {
 export interface PosSettingsDto {
   storeName: string;
   currencyLabel: string;
+  receiptAddress: string;
   receiptLandline: string;
   receiptPhone: string;
   lowStockThreshold: number;
@@ -28,7 +29,6 @@ export interface SkuDetailDto {
   id: number;
   barcode: string;
   productName: string;
-  size: string;
   stock: number;
   unitPrice: number;
   salePrice: number | null;
@@ -103,7 +103,6 @@ export interface PagedSalesResult {
 export interface StockRowDto {
   skuId: number;
   modelName: string;
-  size: string;
   barcode: string;
   stock: number;
   barcodePngBase64?: string;
@@ -120,7 +119,6 @@ export interface AdjustStockRequest {
 export interface StockAdjustmentDto {
   timestamp: string;
   modelName: string;
-  size: string;
   quantityDelta: number;
   reason: string;
   performedBy: string;
@@ -134,17 +132,13 @@ export interface ProductModelSummaryDto {
   id: number;
   name: string;
   description?: string | null;
-  skuCount: number;
+  skuId: number;
+  barcode: string;
+  barcodePngBase64: string;
+  stock: number;
   buyPrice: number;
   unitPrice: number;
   salePrice: number | null;
-}
-
-export interface ProductSkuListRowDto {
-  id: number;
-  size: string;
-  barcode: string;
-  stock: number;
 }
 
 export interface CreateProductModelRequest {
@@ -153,19 +147,12 @@ export interface CreateProductModelRequest {
   buyPrice?: number;
   unitPrice?: number;
   salePrice?: number | null;
+  initialStock?: number;
 }
 
 export interface UpdateProductModelRequest {
   name: string;
   description?: string | null;
-}
-
-export type ClothingSize = 'xs' | 's' | 'm' | 'l' | 'xl' | 'xxl' | 'custom';
-
-export interface CreateSkuRequest {
-  productModelId: number;
-  size: ClothingSize;
-  stock: number;
 }
 
 export interface UpdateProductPriceRequest {
@@ -194,6 +181,20 @@ export interface CreateUserRequest {
   username: string;
   password: string;
   role: UserRole;
+}
+
+export interface LabelPrintQueueStatusDto {
+  pendingCount: number;
+}
+
+export interface EnqueueLabelPrintRequest {
+  barcode: string;
+  count?: number;
+}
+
+export interface EnqueueLabelPrintResponse {
+  jobId: string;
+  message: string;
 }
 
 export interface ResetPasswordRequest {
@@ -230,19 +231,24 @@ export interface SaleLineRefundableDto {
   skuId: number;
   productName: string;
   size: string;
+  originalQuantity: number;
   quantityAvailable: number;
   alreadyRefunded: number;
+  alreadyRefundedAmount: number;
   unitPrice: number;
+  netLineTotal: number;
+  refundUnitPrice: number;
+  refundLineTotal: number;
 }
 
 export interface RefundLineDto {
   skuId: number;
-  quantity: number;
+  quantityToRefund: number;
 }
 
 export interface RefundRequestDto {
   receiptNumber: string;
-  refundType: RefundType;
+  type: RefundType;
   lines?: RefundLineDto[] | null;
 }
 

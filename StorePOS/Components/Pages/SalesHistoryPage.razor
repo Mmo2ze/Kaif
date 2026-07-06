@@ -39,7 +39,7 @@
 
 @if (!IsAdmin)
 {
-    <p class="muted">Your sales for the current UTC calendar day. Date filters and export are not available.</p>
+    <p class="muted">Your sales only — pick a date range below.</p>
 }
 else if (_tab == "sales")
 {
@@ -76,10 +76,13 @@ else if (_tab == "sales")
                 <span class="sales-money-row-label">Refunded</span>
                 <span class="sales-money-row-value">− @MoneyFormat.Format(_summary.RangeRefunded, StoreSettings.CurrencyLabel)</span>
             </div>
+            @if (IsAdmin)
+            {
             <div class="sales-money-row">
                 <span class="sales-money-row-label">Net profit</span>
                 <span class="sales-money-row-value">@MoneyFormat.Format(_summary.RangeNetProfit, StoreSettings.CurrencyLabel)</span>
             </div>
+            }
         </div>
         <div class="sales-summary-grid sales-summary-grid-secondary">
             <div class="sales-card">
@@ -93,7 +96,10 @@ else if (_tab == "sales")
             <div class="sales-card">
                 <div class="sales-card-label">Today net (UTC)</div>
                 <div class="sales-card-value">@MoneyFormat.Format(_summary.TodayNetRevenue, StoreSettings.CurrencyLabel)</div>
+                @if (IsAdmin)
+                {
                 <div class="muted sales-card-sub">Profit today: @MoneyFormat.Format(_summary.TodayNetProfit, StoreSettings.CurrencyLabel)</div>
+                }
             </div>
             <div class="sales-card">
                 <div class="sales-card-label">Top model (qty)</div>
@@ -368,14 +374,23 @@ else if (IsAdmin && _tab == "stats" && _stats is not null)
     }
     else
     {
-        <p class="muted sales-seller-date-hint">Date: @DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) (UTC)</p>
-        <button type="button" class="btn primary" disabled="@_loading" @onclick="ApplyFiltersAsync">
-            @if (_loading)
-            {
-                <span class="spinner spinner-sm" aria-hidden="true"></span>
-            }
-            Refresh
-        </button>
+        <div class="sales-filter-field">
+            <label for="sales-from">From</label>
+            <InputDate id="sales-from" class="input" @bind-Value="_from" />
+        </div>
+        <div class="sales-filter-field">
+            <label for="sales-to">To</label>
+            <InputDate id="sales-to" class="input" @bind-Value="_to" />
+        </div>
+        <div class="sales-filter-actions">
+            <button type="button" class="btn primary" disabled="@_loading" @onclick="ApplyFiltersAsync">
+                @if (_loading)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                Apply
+            </button>
+        </div>
     }
 </section>
 
@@ -402,8 +417,8 @@ else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
                 @if (IsAdmin)
                 {
                     <th>Status</th>
+                    <th>Cashier</th>
                 }
-                <th>Cashier</th>
                 <th class="col-num">Items</th>
                 <th class="col-money">Subtotal</th>
                 <th class="col-money">Discount</th>
@@ -432,8 +447,8 @@ else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
                                 <span class="badge-partial">Partial</span>
                             }
                         </td>
+                        <td>@row.CashierUsername</td>
                     }
-                    <td>@row.CashierUsername</td>
                     <td class="col-num">@row.UnitCount <span class="muted">(@(row.LineCount) ln)</span></td>
                     <td class="col-money">@MoneyFormat.Format(row.Subtotal, StoreSettings.CurrencyLabel)</td>
                     <td class="col-money">@MoneyFormat.Format(row.DiscountAmount, StoreSettings.CurrencyLabel)</td>
@@ -451,7 +466,7 @@ else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
                 @if (_expanded.Contains(row.Id) && _details.TryGetValue(row.Id, out var detail))
                 {
                     <tr class="sales-row-detail">
-                        <td colspan="@(IsAdmin ? 9 : 7)">
+                        <td colspan="@(IsAdmin ? 9 : 6)">
                             <div class="sales-detail-inner">
                                 <table class="sales-lines-table">
                                     <thead>
@@ -485,7 +500,7 @@ else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
                 else if (_expanded.Contains(row.Id))
                 {
                     <tr class="sales-row-detail">
-                        <td colspan="@(IsAdmin ? 9 : 7)"><p class="muted px-3 loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading lines…</p></td>
+                        <td colspan="@(IsAdmin ? 9 : 6)"><p class="muted px-3 loading-with-spinner"><span class="spinner spinner-sm" aria-hidden="true"></span> Loading lines…</p></td>
                     </tr>
                 }
             }
@@ -572,7 +587,7 @@ else if (_pageResult is not null && (_tab == "sales" || !IsAdmin))
 
     private async Task ApplyFiltersAsync()
     {
-        if (IsAdmin && _from > _to)
+        if (_from > _to)
         {
             _error = "From date cannot be after To date.";
             await InvokeAsync(StateHasChanged);

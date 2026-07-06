@@ -8,22 +8,22 @@ export function DesktopNav() {
 
   const linkClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : undefined);
 
-  if (!isAdmin) {
-    return null;
-  }
-
   return (
     <aside className="app-side-desktop" aria-label="Main">
       <div className="app-side-brand">{settings.storeName}</div>
-      <NavLink to="/home" className={linkClass}>
-        Home
-      </NavLink>
-      <NavLink to="/stock" className={linkClass}>
-        Stock
-      </NavLink>
+      {isAdmin && (
+        <NavLink to="/home" className={linkClass}>
+          Home
+        </NavLink>
+      )}
       <NavLink to="/products" className={linkClass}>
         Products
       </NavLink>
+      {isAdmin && (
+        <NavLink to="/more" className={linkClass}>
+          More
+        </NavLink>
+      )}
     </aside>
   );
 }

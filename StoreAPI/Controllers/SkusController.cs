@@ -26,33 +26,8 @@ public sealed class SkusController : ControllerBase
 
     [HttpPost]
     [Authorize(Roles = nameof(UserRole.Admin))]
-    public async Task<ActionResult<SkuDetailDto>> Create([FromBody] CreateSkuRequest body, CancellationToken ct)
-    {
-        var model = await _db.ProductModels.AsNoTracking().FirstOrDefaultAsync(p => p.Id == body.ProductModelId, ct);
-        if (model is null)
-            return NotFound("Product model not found.");
-
-        var duplicate = await _db.Skus.AsNoTracking()
-            .AnyAsync(s => s.ProductModelId == body.ProductModelId && s.Size == body.Size, ct);
-        if (duplicate)
-            return Conflict("This size already exists for the product model.");
-
-        var sku = new SKU
-        {
-            ProductModelId = body.ProductModelId,
-            Size = body.Size,
-            Stock = Math.Max(0, body.Stock),
-        };
-        _db.Skus.Add(sku);
-        await _db.SaveChangesAsync(ct);
-
-        sku.Barcode = SkuBarcode.ForSkuId(sku.Id);
-        await _db.SaveChangesAsync(ct);
-
-        sku.ProductModel = model;
-        var png = _barcodePng.ToPngBase64(sku.Barcode);
-        return Ok(ToDetailDto(sku, png));
-    }
+    public IActionResult Create([FromBody] CreateSkuRequest body) =>
+        BadRequest("Sizes are no longer supported. Add a product instead — stock and barcode are created automatically.");
 
     [HttpGet("{barcode}")]
     [Authorize]
@@ -81,7 +56,6 @@ public sealed class SkusController : ControllerBase
             var label = new SkuLabelContent(
                 "Kaif",
                 sku.ProductModel?.Name ?? "Product",
-                sku.Size.ToString(),
                 priceText,
                 sku.Barcode,
                 onSale ? $"{unitPrice:N2}" : null);
@@ -120,7 +94,6 @@ public sealed class SkusController : ControllerBase
             sku.Id,
             sku.ProductModelId,
             sku.ProductModel?.Name,
-            sku.Size,
             sku.Barcode,
             png,
             sku.Stock,

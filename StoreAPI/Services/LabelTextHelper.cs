@@ -1,55 +1,16 @@
 using System.Text;
 using SkiaSharp;
-using SkiaSharp.HarfBuzz;
+using StoreShared.Text;
 
 namespace StoreAPI.Services;
 
 /// <summary>Draws label text with HarfBuzz shaping for connected Arabic script.</summary>
 internal static class LabelTextHelper
 {
-    private static readonly string[] ArabicFontFiles = ["tahoma.ttf", "segoeui.ttf", "arial.ttf"];
-    private static readonly string[] LatinFontFamilies = ["Segoe UI", "Arial"];
+    public static bool ContainsArabic(string text) => LabelFontResolver.ContainsArabic(text);
 
-    private readonly record struct TextRun(string Text, bool IsArabic);
-
-    public static bool ContainsArabic(string text)
-    {
-        foreach (var rune in text.EnumerateRunes())
-        {
-            if (IsArabicRune(rune))
-                return true;
-        }
-
-        return false;
-    }
-
-    public static SKTypeface ResolveTypeface(string text, SKFontStyle style)
-    {
-        if (ContainsArabic(text))
-        {
-            var fontsDir = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
-            foreach (var file in ArabicFontFiles)
-            {
-                var path = Path.Combine(fontsDir, file);
-                if (!File.Exists(path))
-                    continue;
-                var fromFile = SKTypeface.FromFile(path);
-                if (fromFile is not null)
-                    return fromFile;
-            }
-        }
-
-        foreach (var family in LatinFontFamilies)
-        {
-            var tf = SKTypeface.FromFamilyName(family, style);
-            if (tf is not null && !string.IsNullOrEmpty(tf.FamilyName))
-                return tf;
-        }
-
-        return SKTypeface.FromFamilyName("Arial", style)
-               ?? SKTypeface.FromFamilyName("sans-serif", style)
-               ?? SKTypeface.CreateDefault();
-    }
+    public static SKTypeface ResolveTypeface(string text, SKFontStyle style) =>
+        LabelFontResolver.ResolveTypeface(text, style);
 
     public static SKPaint CreatePaint(string text, SKFontStyle style, float textSize)
     {
@@ -67,23 +28,22 @@ internal static class LabelTextHelper
         if (string.IsNullOrEmpty(text))
             return;
 
-        if (ContainsArabic(text) && HasMixedScripts(text))
+        if (ContainsArabic(text) && BidiTextRuns.HasMixedScripts(text))
         {
-            var runs = SplitRuns(text);
-            var totalWidth = runs.Sum(r => MeasureRun(r, style, textSize));
-            DrawRuns(canvas, runs, (labelWidth - totalWidth) / 2f, baselineY, style, textSize);
+            BidiTextRuns.DrawRunsCentered(canvas, BidiTextRuns.Split(text), baselineY, style, textSize, labelWidth);
             return;
         }
 
         if (ContainsArabic(text))
         {
-            DrawShaped(canvas, text, 0f, baselineY, SKTextAlign.Center, labelWidth, style, textSize);
+            using var paint = CreatePaint(text, style, textSize);
+            ArabicTextShaper.Draw(canvas, text, baselineY, paint, ArabicTextShaper.HorizontalAlign.Center, labelWidth);
             return;
         }
 
-        using var paint = CreatePaint(text, style, textSize);
-        var width = paint.MeasureText(text);
-        canvas.DrawText(text, (labelWidth - width) / 2f, baselineY, paint);
+        using var latinPaint = CreatePaint(text, style, textSize);
+        var width = latinPaint.MeasureText(text);
+        canvas.DrawText(text, (labelWidth - width) / 2f, baselineY, latinPaint);
     }
 
     public static float MeasureTextWidth(string text, SKFontStyle style, float textSize)
@@ -91,40 +51,17 @@ internal static class LabelTextHelper
         if (string.IsNullOrEmpty(text))
             return 0;
 
-        if (ContainsArabic(text) && HasMixedScripts(text))
-            return SplitRuns(text).Sum(r => MeasureRun(r, style, textSize));
+        if (ContainsArabic(text) && BidiTextRuns.HasMixedScripts(text))
+            return BidiTextRuns.MeasureRunsWidth(BidiTextRuns.Split(text), style, textSize);
 
         if (ContainsArabic(text))
-            return MeasureShapedWidth(text, style, textSize);
+        {
+            using var paint = CreatePaint(text, style, textSize);
+            return ArabicTextShaper.MeasureWidth(text, paint);
+        }
 
-        using var paint = CreatePaint(text, style, textSize);
-        return paint.MeasureText(text);
-    }
-
-    private static void DrawShaped(
-        SKCanvas canvas,
-        string text,
-        float x,
-        float baselineY,
-        SKTextAlign align,
-        float lineWidth,
-        SKFontStyle style,
-        float textSize)
-    {
-        using var paint = CreatePaint(text, style, textSize);
-        using var shaper = new SKShaper(paint.Typeface);
-        var width = shaper.Shape(text, paint).Width;
-        var drawX = align == SKTextAlign.Center
-            ? (lineWidth - width) / 2f
-            : x;
-        canvas.DrawShapedText(shaper, text, drawX, baselineY, paint);
-    }
-
-    private static float MeasureShapedWidth(string text, SKFontStyle style, float textSize)
-    {
-        using var paint = CreatePaint(text, style, textSize);
-        using var shaper = new SKShaper(paint.Typeface);
-        return shaper.Shape(text, paint).Width;
+        using var latinPaint = CreatePaint(text, style, textSize);
+        return latinPaint.MeasureText(text);
     }
 
     public readonly record struct ProductTextPlan(IReadOnlyList<string> Lines, float FontSizePx, float BlockHeight);
@@ -328,99 +265,5 @@ internal static class LabelTextHelper
         var first = string.Join(' ', words.Take(bestSplit));
         var second = string.Join(' ', words.Skip(bestSplit));
         return string.IsNullOrEmpty(second) ? [first] : [first, second];
-    }
-
-    private static void DrawRuns(SKCanvas canvas, IReadOnlyList<TextRun> runs, float x, float baselineY, SKFontStyle style, float textSize)
-    {
-        foreach (var run in runs)
-        {
-            if (string.IsNullOrEmpty(run.Text))
-                continue;
-
-            using var paint = CreatePaint(run.Text, style, textSize);
-            if (run.IsArabic)
-            {
-                using var shaper = new SKShaper(paint.Typeface);
-                canvas.DrawShapedText(shaper, run.Text, x, baselineY, paint);
-                x += shaper.Shape(run.Text, paint).Width;
-            }
-            else
-            {
-                canvas.DrawText(run.Text, x, baselineY, paint);
-                x += paint.MeasureText(run.Text);
-            }
-        }
-    }
-
-    private static float MeasureRun(TextRun run, SKFontStyle style, float textSize)
-    {
-        if (string.IsNullOrEmpty(run.Text))
-            return 0;
-
-        using var paint = CreatePaint(run.Text, style, textSize);
-        if (run.IsArabic)
-        {
-            using var shaper = new SKShaper(paint.Typeface);
-            return shaper.Shape(run.Text, paint).Width;
-        }
-
-        return paint.MeasureText(run.Text);
-    }
-
-    private static List<TextRun> SplitRuns(string text)
-    {
-        var runs = new List<TextRun>();
-        if (string.IsNullOrEmpty(text))
-            return runs;
-
-        var sb = new StringBuilder();
-        bool? currentArabic = null;
-
-        foreach (var rune in text.EnumerateRunes())
-        {
-            var isArabic = IsArabicRune(rune);
-            if (currentArabic.HasValue && currentArabic != isArabic)
-            {
-                runs.Add(new TextRun(sb.ToString(), currentArabic.Value));
-                sb.Clear();
-            }
-
-            currentArabic = isArabic;
-            sb.Append(rune);
-        }
-
-        if (sb.Length > 0)
-            runs.Add(new TextRun(sb.ToString(), currentArabic ?? false));
-
-        return runs;
-    }
-
-    private static bool IsArabicRune(Rune rune)
-    {
-        var v = rune.Value;
-        return v is >= '\u0600' and <= '\u06FF' or >= '\u0750' and <= '\u077F' or >= '\u08A0' and <= '\u08FF';
-    }
-
-    /// <summary>Arabic product name plus Latin size suffix (e.g. " - xxl") must not be shaped as one RTL string.</summary>
-    private static bool HasMixedScripts(string text)
-    {
-        var hasArabic = false;
-        var hasNonArabic = false;
-
-        foreach (var rune in text.EnumerateRunes())
-        {
-            if (Rune.IsWhiteSpace(rune))
-                continue;
-
-            if (IsArabicRune(rune))
-                hasArabic = true;
-            else
-                hasNonArabic = true;
-
-            if (hasArabic && hasNonArabic)
-                return true;
-        }
-
-        return false;
     }
 }

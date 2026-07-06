@@ -14,6 +14,8 @@ public sealed class StoreSettingsService
 
     public int LowStockThreshold { get; private set; } = 5;
 
+    public string ReceiptAddress { get; private set; } = "";
+
     public string ReceiptLandline { get; private set; } = "";
 
     public string ReceiptPhone { get; private set; } = "";
@@ -29,6 +31,7 @@ public sealed class StoreSettingsService
         AllowSellerDiscount = dto.AllowSellerDiscount;
         if (dto.LowStockThreshold >= 0)
             LowStockThreshold = dto.LowStockThreshold;
+        ReceiptAddress = dto.ReceiptAddress?.Trim() ?? "";
         ReceiptLandline = dto.ReceiptLandline?.Trim() ?? "";
         ReceiptPhone = dto.ReceiptPhone?.Trim() ?? "";
         Changed?.Invoke();

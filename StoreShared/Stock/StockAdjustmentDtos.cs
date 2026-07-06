@@ -4,7 +4,6 @@ public sealed record StockAdjustmentDto(
     int Id,
     int SkuId,
     string ModelName,
-    string Size,
     string Barcode,
     int QuantityDelta,
     string Reason,

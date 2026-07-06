@@ -1,0 +1,102 @@
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (14ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT COUNT(*) FROM "sqlite_master" WHERE "type" = 'table' AND "rootpage" IS NOT NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (2ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "p"."Id", "p"."BuyPrice", "p"."Description", "p"."Name", "p"."SalePrice", "p"."UnitPrice", "s"."Id", "s"."Barcode", "s"."BuyPrice", "s"."ProductModelId", "s"."SalePrice", "s"."Size", "s"."Stock", "s"."UnitPrice"
+      FROM "ProductModels" AS "p"
+      LEFT JOIN "Skus" AS "s" ON "p"."Id" = "s"."ProductModelId"
+      ORDER BY "p"."Id"
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."DiscountAmount", "s"."IsFullyRefunded", "s"."ReceiptNumber", "s"."Timestamp", "s"."TotalAmount", "s"."UserId"
+      FROM "Sales" AS "s"
+      WHERE "s"."ReceiptNumber" = ''
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT DISTINCT "s"."SaleId"
+      FROM "SaleEvents" AS "s"
+      WHERE "s"."EventType" = 'Completed'
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (1ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."DiscountAmount", "s"."IsFullyRefunded", "s"."ReceiptNumber", "s"."Timestamp", "s"."TotalAmount", "s"."UserId", "u"."Id", "u"."IsActive", "u"."PasswordHash", "u"."Role", "u"."Username", "s2"."Id", "s2"."Quantity", "s2"."SKUId", "s2"."SaleId", "s2"."UnitCost", "s2"."UnitPrice", "s2"."Id0", "s2"."Barcode", "s2"."BuyPrice", "s2"."ProductModelId", "s2"."SalePrice", "s2"."Size", "s2"."Stock", "s2"."UnitPrice0", "s2"."Id1", "s2"."BuyPrice0", "s2"."Description", "s2"."Name", "s2"."SalePrice0", "s2"."UnitPrice1"
+      FROM "Sales" AS "s"
+      INNER JOIN "Users" AS "u" ON "s"."UserId" = "u"."Id"
+      LEFT JOIN (
+          SELECT "s0"."Id", "s0"."Quantity", "s0"."SKUId", "s0"."SaleId", "s0"."UnitCost", "s0"."UnitPrice", "s1"."Id" AS "Id0", "s1"."Barcode", "s1"."BuyPrice", "s1"."ProductModelId", "s1"."SalePrice", "s1"."Size", "s1"."Stock", "s1"."UnitPrice" AS "UnitPrice0", "p"."Id" AS "Id1", "p"."BuyPrice" AS "BuyPrice0", "p"."Description", "p"."Name", "p"."SalePrice" AS "SalePrice0", "p"."UnitPrice" AS "UnitPrice1"
+          FROM "SaleItems" AS "s0"
+          INNER JOIN "Skus" AS "s1" ON "s0"."SKUId" = "s1"."Id"
+          INNER JOIN "ProductModels" AS "p" ON "s1"."ProductModelId" = "p"."Id"
+      ) AS "s2" ON "s"."Id" = "s2"."SaleId"
+      ORDER BY "s"."Id", "u"."Id", "s2"."Id", "s2"."Id0"
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."Barcode", "s"."BuyPrice", "s"."ProductModelId", "s"."SalePrice", "s"."Size", "s"."Stock", "s"."UnitPrice"
+      FROM "Skus" AS "s"
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "p"."Id", "p"."BuyPrice", "p"."Description", "p"."Name", "p"."SalePrice", "p"."UnitPrice", "s"."Id", "s"."Barcode", "s"."BuyPrice", "s"."ProductModelId", "s"."SalePrice", "s"."Size", "s"."Stock", "s"."UnitPrice"
+      FROM "ProductModels" AS "p"
+      LEFT JOIN "Skus" AS "s" ON "p"."Id" = "s"."ProductModelId"
+      ORDER BY "p"."Id"
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT EXISTS (
+          SELECT 1
+          FROM "Users" AS "u")
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT EXISTS (
+          SELECT 1
+          FROM "StoreSettings" AS "s")
+warn: Microsoft.EntityFrameworkCore.Query[10103]
+      The query uses the 'First'/'FirstOrDefault' operator without 'OrderBy' and filter operators. This may lead to unpredictable results.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."AllowSellerDiscount", "s"."BackupIntervalHours", "s"."CurrencyLabel", "s"."DiscordBackupWebhookUrl", "s"."LastBackupUtc", "s"."LowStockThreshold", "s"."ReceiptAddress", "s"."ReceiptLandline", "s"."ReceiptPhone", "s"."StoreName"
+      FROM "StoreSettings" AS "s"
+      LIMIT 1
+warn: Microsoft.AspNetCore.DataProtection.Repositories.EphemeralXmlRepository[50]
+      Using an in-memory repository. Keys will not be persisted to storage.
+warn: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[59]
+      Neither user profile nor HKLM registry available. Using an ephemeral key repository. Protected data will be unavailable when application exits.
+warn: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[35]
+      No XML encryptor configured. Key {9674dee9-641a-45eb-92d8-3c432c6abab0} may be persisted to storage in unencrypted form.
+warn: Microsoft.AspNetCore.Server.Kestrel[0]
+      Overriding address(es) 'http://0.0.0.0:5050'. Binding to endpoints defined via IConfiguration and/or UseKestrel() instead.
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://0.0.0.0:5050
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/elmotaheda2026/Kaif/StoreAPI/bin/Debug/net10.0
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."AllowSellerDiscount", "s"."BackupIntervalHours", "s"."CurrencyLabel", "s"."DiscordBackupWebhookUrl", "s"."LastBackupUtc", "s"."LowStockThreshold", "s"."ReceiptAddress", "s"."ReceiptLandline", "s"."ReceiptPhone", "s"."StoreName"
+      FROM "StoreSettings" AS "s"
+      WHERE "s"."Id" = 1
+      LIMIT 1
+warn: StoreAPI.Services.DatabaseBackupService[0]
+      Discord webhook URL is not configured.
+warn: StoreAPI.Services.DatabaseBackupService[0]
+      Scheduled backup did not complete: Discord webhook URL is not configured.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "s"."Id", "s"."AllowSellerDiscount", "s"."BackupIntervalHours", "s"."CurrencyLabel", "s"."DiscordBackupWebhookUrl", "s"."LastBackupUtc", "s"."LowStockThreshold", "s"."ReceiptAddress", "s"."ReceiptLandline", "s"."ReceiptPhone", "s"."StoreName"
+      FROM "StoreSettings" AS "s"
+      WHERE "s"."Id" = 1
+      LIMIT 1
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (3ms) [Parameters=[@userId='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
+      SELECT "u"."Id", "u"."IsActive", "u"."PasswordHash", "u"."Role", "u"."Username"
+      FROM "Users" AS "u"
+      WHERE "u"."Id" = @userId
+      LIMIT 1
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "p"."Id", "p"."BuyPrice", "p"."Description", "p"."Name", "p"."SalePrice", "p"."UnitPrice", "s"."Id", "s"."Barcode", "s"."BuyPrice", "s"."ProductModelId", "s"."SalePrice", "s"."Size", "s"."Stock", "s"."UnitPrice"
+      FROM "ProductModels" AS "p"
+      LEFT JOIN "Skus" AS "s" ON "p"."Id" = "s"."ProductModelId"
+      ORDER BY "p"."Name", "p"."Id"

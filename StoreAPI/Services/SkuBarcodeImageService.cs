@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using BarcodeStandard;
 using SkiaSharp;
+using StoreShared;
 using StoreShared.Barcode;
 
 namespace StoreAPI.Services;
@@ -17,6 +18,7 @@ public sealed class SkuBarcodeImageService
     private static readonly float ProductFontPx = PtToPx(9f);
     private static readonly float ProductFontMinPx = PtToPx(5f);
     private static readonly float PriceFontPx = PtToPx(11f);
+    private static readonly float OriginalPriceFontPx = PtToPx(9f);
     private static readonly float BarcodeDigitFontPx = PtToPx(8f);
     private const float BarcodeMaxHeightPx = 68f;
 
@@ -44,11 +46,11 @@ public sealed class SkuBarcodeImageService
 
     public string ToFullLabelPngBase64(SkuLabelContent content)
     {
-        var cacheKey = string.Join('\x1f', "F13", content.Barcode, content.ProductName, content.SizeText, content.PriceText, content.OriginalPriceText ?? "");
+        var cacheKey = string.Join('\x1f', StoreBuild.LabelRenderVersion, content.Barcode, content.ProductName, content.PriceText, content.OriginalPriceText ?? "");
         return Convert.ToBase64String(_pngBytes.GetOrAdd(cacheKey, static k =>
         {
-            var p = k.Split('\x1f', 6);
-            var label = new SkuLabelContent(LabelStoreName, p[2], p[3], p[4], p[1], p[5].Length == 0 ? null : p[5]);
+            var p = k.Split('\x1f', 5);
+            var label = new SkuLabelContent(LabelStoreName, p[2], p[3], p[1], p[4].Length == 0 ? null : p[4]);
             return ComposeFullLabel(label);
         }));
     }
@@ -65,15 +67,14 @@ public sealed class SkuBarcodeImageService
 
         // 1. Store name — always Kaif on printed labels
         var y = Margin + StoreTopMargin + StoreFontPx;
-        LabelTextHelper.DrawCentered(canvas, LabelStoreName, y, LabelW, SKFontStyle.Bold, StoreFontPx);
+        LabelTextHelper.DrawCentered(canvas, LabelStoreName, y, LabelW, SKFontStyle.Normal, StoreFontPx);
 
-        // 2. Product name — size (shrink to fit, else up to 2 lines; HarfBuzz for Arabic)
+        // 2. Product name (shrink to fit, else up to 2 lines; HarfBuzz for Arabic)
         var productAreaTop = y + ProductFontPx * 0.35f;
         var priceTop = LabelH - Margin - PriceBottomMargin - PriceFontPx;
         var maxProductBlockH = priceTop - productAreaTop - 8f;
-        var productPlan = LabelTextHelper.PlanProductNameWithSize(
+        var productPlan = LabelTextHelper.PlanProductText(
             content.ProductName,
-            content.SizeText,
             SKFontStyle.Normal,
             ProductFontPx,
             ProductFontMinPx,
@@ -105,40 +106,44 @@ public sealed class SkuBarcodeImageService
             canvas.DrawImage(barcodeImage, SKRect.Create(dx, dy, dw, dh));
         }
 
-        // 4. Price at bottom — when on sale: crossed-out original + sale price side by side
+        // 4. Price at bottom — when on sale: tiny crossed-out original + normal sale price
         var priceBaseline = LabelH - Margin - PriceBottomMargin;
         if (string.IsNullOrEmpty(content.OriginalPriceText))
         {
-            LabelTextHelper.DrawCentered(canvas, content.PriceText, priceBaseline, LabelW, SKFontStyle.Bold, PriceFontPx);
+            LabelTextHelper.DrawCentered(canvas, content.PriceText, priceBaseline, LabelW, SKFontStyle.Normal, PriceFontPx);
         }
         else
         {
-            const float gap = 10f;
-            var originalW = LabelTextHelper.MeasureTextWidth(content.OriginalPriceText, SKFontStyle.Normal, ProductFontPx);
-            var saleW = LabelTextHelper.MeasureTextWidth(content.PriceText, SKFontStyle.Bold, PriceFontPx);
+            const float gap = 8f;
+            var originalW = LabelTextHelper.MeasureTextWidth(content.OriginalPriceText, SKFontStyle.Normal, OriginalPriceFontPx);
+            var saleW = LabelTextHelper.MeasureTextWidth(content.PriceText, SKFontStyle.Normal, PriceFontPx);
             var startX = Math.Max(Margin, (LabelW - (originalW + gap + saleW)) / 2f);
 
-            using (var originalPaint = LabelTextHelper.CreatePaint(content.OriginalPriceText, SKFontStyle.Normal, ProductFontPx))
+            using (var originalPaint = LabelTextHelper.CreatePaint(content.OriginalPriceText, SKFontStyle.Normal, OriginalPriceFontPx))
             {
-                canvas.DrawText(content.OriginalPriceText, startX, priceBaseline, originalPaint);
-                originalPaint.GetFontMetrics(out var metrics);
-                var pad = 2f;
+                originalPaint.GetFontMetrics(out var originalMetrics);
+                using var saleMetricsPaint = LabelTextHelper.CreatePaint(content.PriceText, SKFontStyle.Normal, PriceFontPx);
+                saleMetricsPaint.GetFontMetrics(out var saleMetrics);
+                var originalBaseline = priceBaseline - (saleMetrics.CapHeight - originalMetrics.CapHeight) / 2f;
+
+                canvas.DrawText(content.OriginalPriceText, startX, originalBaseline, originalPaint);
+                var pad = 1f;
                 var slashX1 = startX - pad;
                 var slashX2 = startX + originalW + pad;
-                var slashY1 = priceBaseline + metrics.Descent + pad * 0.5f;
-                var slashY2 = priceBaseline + metrics.Ascent - pad * 0.5f;
+                var slashY1 = originalBaseline + originalMetrics.Descent + pad * 0.5f;
+                var slashY2 = originalBaseline + originalMetrics.Ascent - pad * 0.5f;
 
                 using var strikePaint = new SKPaint
                 {
                     Color = SKColors.Black,
                     IsAntialias = true,
-                    StrokeWidth = Math.Max(1.5f, ProductFontPx / 10f),
+                    StrokeWidth = Math.Max(1f, OriginalPriceFontPx / 12f),
                     StrokeCap = SKStrokeCap.Round,
                 };
                 canvas.DrawLine(slashX1, slashY1, slashX2, slashY2, strikePaint);
             }
 
-            using (var salePaint = LabelTextHelper.CreatePaint(content.PriceText, SKFontStyle.Bold, PriceFontPx))
+            using (var salePaint = LabelTextHelper.CreatePaint(content.PriceText, SKFontStyle.Normal, PriceFontPx))
             {
                 canvas.DrawText(content.PriceText, startX + originalW + gap, priceBaseline, salePaint);
             }

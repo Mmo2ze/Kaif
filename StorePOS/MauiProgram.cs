@@ -50,7 +50,7 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
-        builder.Services.AddScoped<AppState>();
+        builder.Services.AddSingleton<AppState>();
         builder.Services.AddSingleton<StoreApiAutoStartService>();
         builder.Services.AddSingleton<StoreSettingsService>();
         builder.Services.AddSingleton<ToastService>();
@@ -58,10 +58,14 @@ public static class MauiProgram
 #if WINDOWS
         builder.Services.AddSingleton<IBarcodePrintService, Platforms.Windows.WindowsBarcodePrintService>();
         builder.Services.AddSingleton<IReceiptPrintService, Platforms.Windows.WindowsReceiptPrintService>();
+#elif MACCATALYST
+        builder.Services.AddSingleton<IBarcodePrintService, Platforms.MacCatalyst.MacBarcodePrintService>();
+        builder.Services.AddSingleton<IReceiptPrintService, Platforms.MacCatalyst.MacReceiptPrintService>();
 #else
         builder.Services.AddSingleton<IBarcodePrintService, UnsupportedBarcodePrintService>();
         builder.Services.AddSingleton<IReceiptPrintService, UnsupportedReceiptPrintService>();
 #endif
+        builder.Services.AddSingleton<LabelPrintQueueWorker>();
         builder.Services.AddScoped<BarcodePrintHelper>();
         builder.Services.AddScoped<AuthHttpMessageHandler>(sp =>
             new AuthHttpMessageHandler(sp.GetRequiredService<AppState>())

@@ -18,6 +18,8 @@
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
     <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+    <!-- .NET MacCatalyst workload may require Xcode 26.5 while Sequoia Macs can only install 26.3 (same SDK). -->
+    <ValidateXcodeVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">false</ValidateXcodeVersion>
     <WindowsPackageType Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">None</WindowsPackageType>
   </PropertyGroup>
 
@@ -45,7 +47,6 @@
     </None>
     <None Include="RunStore.sh" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 
@@ -73,26 +74,32 @@
       <_MacApiRid Condition="'$(RuntimeIdentifier)' == 'maccatalyst-arm64'">osx-arm64</_MacApiRid>
       <_MacApiRid Condition="'$(RuntimeIdentifier)' == 'maccatalyst-x64'">osx-x64</_MacApiRid>
       <_ApiStageDir>$(MSBuildThisFileDirectory)..\StoreAPI\bin\$(Configuration)\net10.0\$(_MacApiRid)\publish-staged-mac</_ApiStageDir>
-      <_AppBundle>$([System.String]::Copy('$(PublishDir)').TrimEnd('/'))/$(ApplicationTitle).app</_AppBundle>
+      <_PublishDirTrimmed>$([System.String]::Copy('$(PublishDir)').TrimEnd('/'))</_PublishDirTrimmed>
+      <!-- dotnet publish writes the real .app beside publish/, not inside publish/Store POS.app. -->
+      <_RidOutputDir>$([System.IO.Path]::GetFullPath('$(_PublishDirTrimmed)/..'))</_RidOutputDir>
+      <_AppBundle>$(_RidOutputDir)/$(ApplicationTitle).app</_AppBundle>
+      <_PublishAppBundle>$(_PublishDirTrimmed)/$(ApplicationTitle).app</_PublishAppBundle>
       <_MacOsDir>$(_AppBundle)/Contents/MacOS</_MacOsDir>
       <_BrowserWww>$(_MacOsDir)/browserwww</_BrowserWww>
       <_ApiWwwRoot>$(_ApiStageDir)/wwwroot</_ApiWwwRoot>
     </PropertyGroup>
+    <Error Condition="!Exists('$(_AppBundle)/Contents/MacOS/StorePOS')" Text="Mac Catalyst app bundle is missing StorePOS executable at $(_AppBundle). Mac publish output layout may have changed." />
     <RemoveDir Directories="$(_ApiStageDir)" Condition="Exists('$(_ApiStageDir)')" />
     <MakeDir Directories="$(_ApiStageDir)" />
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\StoreAPI\StoreAPI.csproj&quot; -c $(Configuration) -r $(_MacApiRid) --self-contained true -p:BuildReact=false -o &quot;$(_ApiStageDir)&quot;" />
-    <ItemGroup>
-      <_ApiPayload Include="$(_ApiStageDir)/**/*" Exclude="$(_ApiStageDir)/wwwroot/**" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_ApiPayload)" DestinationFolder="$(_MacOsDir)/%(RecursiveDir)" SkipUnchangedFiles="true" Condition="Exists('$(_MacOsDir)')" />
+    <!-- MSBuild ** globs are unreliable on macOS; rsync matches the Windows robocopy step. -->
+    <Exec Command="rsync -a --exclude wwwroot &quot;$(_ApiStageDir)/&quot; &quot;$(_MacOsDir)/&quot;" />
     <Exec Command="chmod +x &quot;$(_MacOsDir)/StoreAPI&quot;" Condition="Exists('$(_MacOsDir)/StoreAPI')" />
     <RemoveDir Directories="$(_BrowserWww)" Condition="Exists('$(_BrowserWww)')" />
     <MakeDir Directories="$(_BrowserWww)" Condition="Exists('$(_ApiWwwRoot)')" />
-    <ItemGroup>
-      <_WebPayload Include="$(_ApiWwwRoot)/**/*" Condition="Exists('$(_ApiWwwRoot)')" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_WebPayload)" DestinationFolder="$(_BrowserWww)/%(RecursiveDir)" SkipUnchangedFiles="true" Condition="Exists('$(_ApiWwwRoot)')" />
+    <Exec Command="rsync -a &quot;$(_ApiWwwRoot)/&quot; &quot;$(_BrowserWww)/&quot;" Condition="Exists('$(_ApiWwwRoot)')" />
+    <Error Condition="!Exists('$(_MacOsDir)/StoreAPI')" Text="StoreAPI was not copied into the app bundle. Check StoreAPI publish output under $(_ApiStageDir)." />
     <Error Condition="!Exists('$(_BrowserWww)/index.html')" Text="browserwww/index.html is missing after Mac publish. Run scripts/publish-macos.sh (builds StoreWeb first)." />
+    <!-- Replace the stub publish/Store POS.app with the merged bundle scripts expect. -->
+    <RemoveDir Directories="$(_PublishAppBundle)" Condition="Exists('$(_PublishAppBundle)')" />
+    <Exec Command="ditto &quot;$(_AppBundle)&quot; &quot;$(_PublishAppBundle)&quot;" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)RunStore.sh" DestinationFolder="$(_PublishDirTrimmed)" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x &quot;$(_PublishDirTrimmed)/RunStore.sh&quot;" />
   </Target>
 
 </Project>

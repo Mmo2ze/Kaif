@@ -7,7 +7,6 @@ import { formatMoney } from '../utils/money';
 interface CartLine {
   skuId: number;
   productName: string;
-  size: string;
   qty: number;
   unitPrice: number;
   maxStock: number;
@@ -63,7 +62,6 @@ export function PosPage() {
           {
             skuId: sku.id,
             productName: sku.productName,
-            size: sku.size,
             unitPrice: sku.unitPrice,
             qty: 1,
             maxStock: sku.stock,
@@ -148,7 +146,7 @@ export function PosPage() {
               </button>
             </div>
             <div className="muted small">
-              {line.size} · {formatMoney(line.unitPrice, settings.currencyLabel)}
+              {formatMoney(line.unitPrice, settings.currencyLabel)}
             </div>
             <div className="cart-line-foot">
               <div className="qty-stepper">

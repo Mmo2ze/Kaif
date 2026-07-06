@@ -5,6 +5,7 @@ public sealed record PosSettingsDto(
     string CurrencyLabel,
     bool AllowSellerDiscount,
     int LowStockThreshold,
+    string? ReceiptAddress = null,
     string? ReceiptLandline = null,
     string? ReceiptPhone = null);
 

@@ -17,7 +17,6 @@ public interface ICatalogImportService
 public sealed class CatalogImportService : ICatalogImportService
 {
     private const int MaxProducts = 10_000;
-    private const int MaxSkusPerProduct = 64;
     private const long MaxImportBytes = 10 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -44,10 +43,13 @@ public sealed class CatalogImportService : ICatalogImportService
 
         var products = models.Select(p => new CatalogExportProductDto(
             p.Name,
-            p.Skus.OrderBy(s => s.Size).Select(s => s.Size).ToList()))
+            p.BuyPrice,
+            p.UnitPrice,
+            p.SalePrice,
+            p.Skus.Sum(s => s.Stock)))
             .ToList();
 
-        return new CatalogExportFileDto(1, DateTime.UtcNow, products);
+        return new CatalogExportFileDto(2, DateTime.UtcNow, products);
     }
 
     public async Task<CatalogImportResultDto> ImportAsync(Stream jsonStream, CancellationToken cancellationToken = default)
@@ -68,9 +70,6 @@ public sealed class CatalogImportService : ICatalogImportService
         if (file is null || file.Products.Count == 0)
             return Fail("Catalog file is empty.");
 
-        if (file.Version is not (0 or 1))
-            return Fail($"Unsupported catalog version ({file.Version}).");
-
         if (file.Products.Count > MaxProducts)
             return Fail($"Too many products (max {MaxProducts}).");
 
@@ -83,51 +82,57 @@ public sealed class CatalogImportService : ICatalogImportService
             StringComparer.OrdinalIgnoreCase);
 
         var productsCreated = 0;
+        var productsUpdated = 0;
         var skusCreated = 0;
-        var skusSkipped = 0;
 
         foreach (var exported in file.Products)
         {
             if (string.IsNullOrWhiteSpace(exported.Name))
                 continue;
 
-            var sizes = ResolveSizes(exported);
-            if (sizes.Count == 0)
-                continue;
-
-            if (sizes.Count > MaxSkusPerProduct)
-                return Fail($"Product \"{exported.Name.Trim()}\" has too many sizes.");
-
             var key = NormalizeName(exported.Name);
+            var isLegacy = file.Version < 2;
+            var stock = isLegacy ? 0 : Math.Max(0, exported.Stock);
+
             if (!byName.TryGetValue(key, out var model))
             {
-                model = new ProductModel { Name = exported.Name.Trim() };
+                model = new ProductModel
+                {
+                    Name = exported.Name.Trim(),
+                    BuyPrice = isLegacy ? 0 : Math.Max(0, exported.BuyPrice),
+                    UnitPrice = isLegacy ? 0 : Math.Max(0, exported.UnitPrice),
+                    SalePrice = isLegacy ? null : NormalizeSalePrice(exported.SalePrice, exported.UnitPrice),
+                };
                 _db.ProductModels.Add(model);
                 await _db.SaveChangesAsync(cancellationToken);
                 byName[key] = model;
                 productsCreated++;
+
+                var sku = await ProductSkuFactory.CreatePrimarySkuAsync(_db, model.Id, stock, cancellationToken);
+                skusCreated++;
+                _ = sku;
+                continue;
             }
 
-            var skuBySize = model.Skus.ToDictionary(s => s.Size);
-            foreach (var size in sizes.Distinct())
+            if (!isLegacy)
             {
-                if (skuBySize.ContainsKey(size))
-                {
-                    skusSkipped++;
-                    continue;
-                }
+                model.BuyPrice = Math.Max(0, exported.BuyPrice);
+                model.UnitPrice = Math.Max(0, exported.UnitPrice);
+                model.SalePrice = NormalizeSalePrice(exported.SalePrice, exported.UnitPrice);
+                productsUpdated++;
+            }
 
-                var sku = new SKU
-                {
-                    ProductModelId = model.Id,
-                    Size = size,
-                    Stock = 0,
-                };
-                _db.Skus.Add(sku);
-                await _db.SaveChangesAsync(cancellationToken);
-                sku.Barcode = SkuBarcode.ForSkuId(sku.Id);
-                skuBySize[size] = sku;
+            var primaryId = await ProductSkuFactory.GetPrimarySkuIdAsync(_db, model.Id, cancellationToken);
+            if (primaryId is null)
+            {
+                await ProductSkuFactory.CreatePrimarySkuAsync(_db, model.Id, stock, cancellationToken);
                 skusCreated++;
+            }
+            else if (!isLegacy && exported.Stock > 0)
+            {
+                var primary = model.Skus.OrderBy(s => s.Id).FirstOrDefault(s => s.Id == primaryId);
+                if (primary is not null)
+                    primary.Stock = Math.Max(0, exported.Stock);
             }
         }
 
@@ -135,20 +140,15 @@ public sealed class CatalogImportService : ICatalogImportService
         _barcodeCache.ClearCache();
 
         var message =
-            $"Imported catalog: {productsCreated} product(s) added, {skusCreated} new size(s) added (stock 0). " +
-            $"{skusSkipped} size(s) already existed — stock unchanged.";
-        return new CatalogImportResultDto(true, message, productsCreated, 0, skusCreated, skusSkipped);
+            $"Imported catalog: {productsCreated} product(s) added, {productsUpdated} updated, {skusCreated} barcode(s) created.";
+        return new CatalogImportResultDto(true, message, productsCreated, productsUpdated, skusCreated, 0);
     }
 
-    private static IReadOnlyList<ClothingSize> ResolveSizes(CatalogExportProductDto exported)
+    private static decimal? NormalizeSalePrice(decimal? salePrice, decimal unitPrice)
     {
-        if (exported.Sizes is { Count: > 0 })
-            return exported.Sizes;
-
-        if (exported.Skus is { Count: > 0 })
-            return exported.Skus.Select(s => s.Size).ToList();
-
-        return Array.Empty<ClothingSize>();
+        if (salePrice is not { } s || s <= 0 || s >= unitPrice)
+            return null;
+        return s;
     }
 
     private static string NormalizeName(string name) => name.Trim();

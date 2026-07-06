@@ -1,33 +1,34 @@
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 
 namespace StoreAPI.Data;
 
 public static class SqlitePathHelper
 {
-    /// <summary>Full path to the SQLite database file (from DefaultConnection).</summary>
-    public static string ResolveDatabaseFilePath(IConfiguration configuration, IWebHostEnvironment environment)
+    /// <summary>Full path to the SQLite database file.</summary>
+    public static string ResolveDatabaseFilePath(IConfiguration configuration, string apiAssemblyDir)
+    {
+        var configured = ReadConfiguredRelativePath(configuration);
+        if (Path.IsPathRooted(configured))
+        {
+            StoreShared.StoreDataPaths.RemoveCorruptDatabaseIfNeeded(configured);
+            return configured;
+        }
+
+        return StoreShared.StoreDataPaths.ResolveDatabasePath(apiAssemblyDir);
+    }
+
+    public static string ResolveSqliteConnectionString(IConfiguration configuration, string apiAssemblyDir)
+    {
+        var dbPath = ResolveDatabaseFilePath(configuration, apiAssemblyDir);
+        return $"Data Source={dbPath}";
+    }
+
+    private static string ReadConfiguredRelativePath(IConfiguration configuration)
     {
         var raw = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=store.db";
         const string prefix = "Data Source=";
         if (!raw.TrimStart().StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("DefaultConnection must be a SQLite Data Source= connection string.");
-        var relative = raw.AsSpan(prefix.Length).Trim().ToString();
-        if (Path.IsPathRooted(relative))
-            return relative;
-        return Path.Combine(environment.ContentRootPath, relative);
-    }
-
-    public static string ResolveSqliteConnectionString(IConfiguration configuration, IWebHostEnvironment environment)
-    {
-        var raw = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=store.db";
-        const string prefix = "Data Source=";
-        if (!raw.TrimStart().StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return raw;
-        var relative = raw.AsSpan(prefix.Length).Trim().ToString();
-        if (Path.IsPathRooted(relative))
-            return raw;
-        var full = Path.Combine(environment.ContentRootPath, relative);
-        return $"{prefix}{full}";
+        return raw.AsSpan(prefix.Length).Trim().ToString();
     }
 }

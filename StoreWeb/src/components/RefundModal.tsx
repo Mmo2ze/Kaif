@@ -5,14 +5,21 @@ import type { RefundType, SaleByReceiptDto } from '../types';
 import { formatMoney } from '../utils/money';
 import { intValue, parseIntInput, type IntInput } from '../utils/numberInput';
 import { tryParseSaleId } from '../utils/receipt';
+import { computeRefundAmount, resolveNetLineTotal } from '../utils/refundPricing';
 
 interface PartialLine {
   skuId: number;
   productName: string;
   size: string;
+  originalQuantity: number;
   available: number;
+  alreadyRefunded: number;
+  alreadyRefundedAmount: number;
   refundQty: IntInput;
   unitPrice: number;
+  netLineTotal: number;
+  maxForAvailable: number;
+  refundUnitPrice: number;
   lineAmount: number;
   hasError: boolean;
 }
@@ -63,7 +70,7 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
       const noPrior = s.lines.every((l) => l.alreadyRefunded === 0);
       return noPrior && available.length === s.lines.length
         ? s.totalAmount
-        : available.reduce((sum, l) => sum + l.unitPrice * l.quantityAvailable, 0);
+        : available.reduce((sum, l) => sum + l.refundLineTotal, 0);
     }
     return lines.filter((l) => !l.hasError).reduce((sum, l) => sum + l.lineAmount, 0);
   };
@@ -87,9 +94,23 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
         skuId: l.skuId,
         productName: l.productName,
         size: l.size,
+        originalQuantity: l.originalQuantity,
         available: l.quantityAvailable,
+        alreadyRefunded: l.alreadyRefunded,
+        alreadyRefundedAmount: l.alreadyRefundedAmount,
         refundQty: 0,
         unitPrice: l.unitPrice,
+        netLineTotal: resolveNetLineTotal(
+          l.netLineTotal,
+          l.refundUnitPrice,
+          l.refundLineTotal,
+          l.originalQuantity,
+          l.quantityAvailable,
+          l.alreadyRefunded,
+          l.unitPrice,
+        ),
+        maxForAvailable: l.refundLineTotal,
+        refundUnitPrice: l.refundUnitPrice,
         lineAmount: 0,
         hasError: false,
       }));
@@ -112,6 +133,15 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
     }
   };
 
+  const partialLineAmount = (line: PartialLine, refundQty: number) =>
+    computeRefundAmount(
+      line.netLineTotal,
+      line.originalQuantity,
+      refundQty,
+      line.alreadyRefunded,
+      line.alreadyRefundedAmount,
+    );
+
   const updatePartialQty = (skuId: number, qty: IntInput) => {
     setPartialLines((prev) => {
       const n = intValue(qty);
@@ -121,13 +151,41 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
               ...l,
               refundQty: qty,
               hasError: n > l.available,
-              lineAmount: n * l.unitPrice,
+              lineAmount: partialLineAmount(l, n),
             }
           : l,
       );
       setPreviewAmount(recalc(sale, refundType, next));
       return next;
     });
+  };
+
+  const selectRefundType = (type: RefundType) => {
+    setRefundType(type);
+    if (type !== 'partial') {
+      setPreviewAmount(recalc(sale, type, partialLines));
+      return;
+    }
+
+    const hasSelection = partialLines.some((l) => intValue(l.refundQty) > 0);
+    const refundable = partialLines.filter((l) => l.available > 0);
+    if (hasSelection || refundable.length !== 1 || refundable[0].available !== 1) {
+      setPreviewAmount(recalc(sale, type, partialLines));
+      return;
+    }
+
+    const next = partialLines.map((l) =>
+      l.skuId === refundable[0].skuId
+        ? {
+            ...l,
+            refundQty: 1,
+            lineAmount: partialLineAmount(l, 1),
+            hasError: false,
+          }
+        : l,
+    );
+    setPartialLines(next);
+    setPreviewAmount(recalc(sale, type, next));
   };
 
   const confirm = async () => {
@@ -143,10 +201,10 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
     try {
       const result = await api.processRefund({
         receiptNumber: sale.receiptNumber,
-        refundType,
+        type: refundType,
         lines:
           refundType === 'partial'
-            ? partialLines.filter((l) => intValue(l.refundQty) > 0).map((l) => ({ skuId: l.skuId, quantity: intValue(l.refundQty) }))
+            ? partialLines.filter((l) => intValue(l.refundQty) > 0).map((l) => ({ skuId: l.skuId, quantityToRefund: intValue(l.refundQty) }))
             : null,
       });
       if (!result.success) {
@@ -210,16 +268,18 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
             </div>
             <div className="refund-type-row">
               <label className="refund-type-option">
-                <input type="radio" name="refund-type" checked={refundType === 'full'} onChange={() => { setRefundType('full'); setPreviewAmount(recalc(sale, 'full', partialLines)); }} />
+                <input type="radio" name="refund-type" checked={refundType === 'full'} onChange={() => selectRefundType('full')} />
                 Full refund
               </label>
               <label className="refund-type-option">
-                <input type="radio" name="refund-type" checked={refundType === 'partial'} onChange={() => { setRefundType('partial'); setPreviewAmount(recalc(sale, 'partial', partialLines)); }} />
+                <input type="radio" name="refund-type" checked={refundType === 'partial'} onChange={() => selectRefundType('partial')} />
                 Partial refund
               </label>
             </div>
             {refundType === 'partial' && (
-              <div className="refund-line-cards">
+              <>
+                <p className="muted small">Enter refund qty per line. Amount includes sale discount.</p>
+                <div className="refund-line-cards">
                 {partialLines.map((line) => (
                   <div key={line.skuId} className={`refund-line-card ${line.hasError ? 'has-error' : ''}`}>
                     <div className="refund-line-card-head">
@@ -244,11 +304,21 @@ export function RefundModal({ visible, initialReceipt, onClose, onCompleted }: P
                           +
                         </button>
                       </div>
-                      <span>{formatMoney(line.lineAmount, settings.currencyLabel)}</span>
+                      <span>
+                        {intValue(line.refundQty) > 0
+                          ? formatMoney(line.lineAmount, settings.currencyLabel)
+                          : line.available > 0
+                            ? `1× ${formatMoney(
+                                partialLineAmount(line, 1),
+                                settings.currencyLabel,
+                              )}`
+                            : '—'}
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
+              </>
             )}
             <p className="refund-running-total">
               <strong>Refund amount:</strong> {formatMoney(previewAmount, settings.currencyLabel)}

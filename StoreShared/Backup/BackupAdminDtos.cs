@@ -12,3 +12,5 @@ public sealed record BackupSettingsUpdateDto(
     [property: JsonPropertyName("backupIntervalHours")] int BackupIntervalHours);
 
 public sealed record BackupRunResponse(bool Success, string Message);
+
+public sealed record BackupArchiveResponse(bool Success, byte[]? Content, string? FileName, string? Message);

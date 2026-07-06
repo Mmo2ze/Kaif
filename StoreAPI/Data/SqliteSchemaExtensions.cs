@@ -116,6 +116,47 @@ public static class SqliteSchemaExtensions
         return updated;
     }
 
+    /// <summary>Ensure every product has one primary SKU; merge stock from legacy multi-size rows onto the primary.</summary>
+    public static async Task EnsurePrimarySkuPerProductAsync(this StoreDbContext db, CancellationToken cancellationToken = default)
+    {
+        var models = await db.ProductModels.Include(p => p.Skus).ToListAsync(cancellationToken);
+        var changed = false;
+
+        foreach (var model in models)
+        {
+            if (model.Skus.Count == 0)
+            {
+                var sku = new SKU
+                {
+                    ProductModelId = model.Id,
+                    Size = ClothingSize.Custom,
+                    Stock = 0,
+                };
+                db.Skus.Add(sku);
+                await db.SaveChangesAsync(cancellationToken);
+                sku.Barcode = SkuBarcode.ForSkuId(sku.Id);
+                changed = true;
+                continue;
+            }
+
+            if (model.Skus.Count <= 1)
+                continue;
+
+            var primary = model.Skus.OrderBy(s => s.Id).First();
+            var extraStock = model.Skus.Where(s => s.Id != primary.Id).Sum(s => s.Stock);
+            if (extraStock > 0)
+            {
+                primary.Stock += extraStock;
+                foreach (var extra in model.Skus.Where(s => s.Id != primary.Id))
+                    extra.Stock = 0;
+                changed = true;
+            }
+        }
+
+        if (changed)
+            await db.SaveChangesAsync(cancellationToken);
+    }
+
     public static async Task EnsureSaleEventsSchemaAsync(this StoreDbContext db, CancellationToken cancellationToken = default)
     {
         var conn = db.Database.GetDbConnection();
@@ -243,6 +284,9 @@ public static class SqliteSchemaExtensions
                 cancellationToken);
             await EnsureColumnAsync(conn, "StoreSettings", "ReceiptPhone",
                 """ALTER TABLE "StoreSettings" ADD COLUMN "ReceiptPhone" TEXT NOT NULL DEFAULT '';""",
+                cancellationToken);
+            await EnsureColumnAsync(conn, "StoreSettings", "ReceiptAddress",
+                """ALTER TABLE "StoreSettings" ADD COLUMN "ReceiptAddress" TEXT NOT NULL DEFAULT '';""",
                 cancellationToken);
         }
         finally

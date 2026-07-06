@@ -124,10 +124,12 @@ export function SalesPage() {
               <span>Refunded</span>
               <strong>− {formatMoney(summary.rangeRefunded, settings.currencyLabel)}</strong>
             </div>
+            {isAdmin && (
             <div className="sales-money-row">
               <span>Net profit</span>
               <strong>{formatMoney(summary.rangeNetProfit, settings.currencyLabel)}</strong>
             </div>
+            )}
           </div>
           <div className="stat-row">
             <div className="stat-chip">
@@ -138,10 +140,12 @@ export function SalesPage() {
               <span className="muted">Today net</span>
               <strong>{formatMoney(summary.todayNetRevenue, settings.currencyLabel)}</strong>
             </div>
+            {isAdmin && (
             <div className="stat-chip">
               <span className="muted">Today profit</span>
               <strong>{formatMoney(summary.todayNetProfit, settings.currencyLabel)}</strong>
             </div>
+            )}
           </div>
         </section>
       )}

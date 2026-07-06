@@ -5,4 +5,5 @@ public sealed record ReceiptLineDto(
     string Size,
     int Quantity,
     decimal UnitPrice,
-    decimal LineTotal);
+    decimal LineTotal,
+    decimal? RegularUnitPrice = null);

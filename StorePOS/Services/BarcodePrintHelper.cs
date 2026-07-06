@@ -16,6 +16,25 @@ public sealed class BarcodePrintHelper
     public bool HasSavedPrinter =>
         _native.IsSupported && !string.IsNullOrWhiteSpace(_native.GetSelectedPrinter());
 
+    private bool UsesBrowserPrint => !HasSavedPrinter;
+
+    /// <summary>Call synchronously at the start of a click handler, before any await, when browser print will follow a fetch.</summary>
+    public Task BeginBrowserPrintAsync()
+    {
+        if (!UsesBrowserPrint)
+            return Task.CompletedTask;
+
+        return _js.InvokeVoidAsync("storePrintBarcodeBegin").AsTask();
+    }
+
+    public Task CancelBrowserPrintAsync()
+    {
+        if (!UsesBrowserPrint)
+            return Task.CompletedTask;
+
+        return _js.InvokeVoidAsync("storePrintBarcodeCancel").AsTask();
+    }
+
     public async Task<(bool Ok, bool UsedNative, string? Error)> PrintAsync(string pngBase64, int count)
     {
         if (_native.IsSupported && !string.IsNullOrWhiteSpace(_native.GetSelectedPrinter()))
@@ -24,15 +43,18 @@ public sealed class BarcodePrintHelper
             if (ok)
                 return (true, true, null);
 
-            return (false, true, "Print failed — check that the barcode printer is on and the label size matches your media.");
+            return (false, true,
+                "Print failed — check that the barcode printer is on, the label size matches your media, " +
+                "and the saved printer name matches System Settings → Printers. " +
+                "Details: ~/Library/Application Support/Store POS/label-debug/print.log");
         }
 
         var jsOk = await _js.InvokeAsync<bool>(
-            "storePrintBarcode",
+            "storePrintBarcodeFinishPending",
             $"data:image/png;base64,{pngBase64}",
             count);
         if (!jsOk)
-            return (false, false, "Could not open print window (check pop-up blocker).");
+            return (false, false, "Could not open the print dialog.");
 
         return (true, false, null);
     }

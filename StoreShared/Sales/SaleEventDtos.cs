@@ -67,7 +67,11 @@ public sealed record SaleLineRefundableDto(
     int AlreadyRefunded,
     int QuantityAvailable,
     decimal UnitPrice,
-    decimal LineTotal);
+    decimal LineTotal,
+    decimal NetLineTotal,
+    decimal AlreadyRefundedAmount,
+    decimal RefundUnitPrice,
+    decimal RefundLineTotal);
 
 public sealed record RefundHistoryDto(
     SaleByReceiptDto OriginalSale,

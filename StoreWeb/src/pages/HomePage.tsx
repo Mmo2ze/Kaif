@@ -28,15 +28,10 @@ export function HomePage() {
         </div>
       )}
       <div className="dash-grid">
-        <NavLink className="dash-card touch-target" to="/stock">
-          <span className="dash-card-icon">▤</span>
-          <span className="dash-card-title">Stock</span>
-          <span className="dash-card-sub muted">Levels &amp; adjustments</span>
-        </NavLink>
         <NavLink className="dash-card touch-target" to="/products">
           <span className="dash-card-icon">▦</span>
           <span className="dash-card-title">Products</span>
-          <span className="dash-card-sub muted">Models &amp; barcodes</span>
+          <span className="dash-card-sub muted">Stock, prices &amp; barcodes</span>
         </NavLink>
       </div>
     </div>

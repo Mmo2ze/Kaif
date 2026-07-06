@@ -75,9 +75,14 @@
             using var loginResponse = await Http.PostAsJsonAsync("api/auth/login", loginBody, AppJson.Options);
             if (!loginResponse.IsSuccessStatusCode)
             {
-                _error = loginResponse.StatusCode == HttpStatusCode.Unauthorized
-                    ? "Invalid username or password."
-                    : "Unable to sign in. The server returned an error.";
+                _error = loginResponse.StatusCode switch
+                {
+                    HttpStatusCode.Unauthorized => "Invalid username or password.",
+                    HttpStatusCode.BadRequest => "Enter both username and password.",
+                    HttpStatusCode.InternalServerError =>
+                        "Store database error — quit the app fully, then reopen. If it persists, remove the store.db file from the app data folder and try again (default login: admin / Admin123!).",
+                    _ => $"Unable to sign in (server error {(int)loginResponse.StatusCode}).",
+                };
                 return;
             }
 

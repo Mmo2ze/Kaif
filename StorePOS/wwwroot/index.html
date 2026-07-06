@@ -113,13 +113,124 @@
                         buffer += ev.key;
                 }, true);
             };
+
+            // Barcode labels: print from the main WebView document (same approach as storePosPrint / receipts).
+            (function () {
+                var DEFAULT_WIDTH_MM = 35;
+                var DEFAULT_HEIGHT_MM = 25;
+
+                function readLabelSize(options) {
+                    var widthMm = DEFAULT_WIDTH_MM;
+                    var heightMm = DEFAULT_HEIGHT_MM;
+                    try {
+                        if (options && options.widthMm) widthMm = options.widthMm;
+                        else {
+                            var storedW = parseInt(localStorage.getItem('kaif_label_width_mm') || '', 10);
+                            if (storedW) widthMm = storedW;
+                        }
+                        if (options && options.heightMm) heightMm = options.heightMm;
+                        else {
+                            var storedH = parseInt(localStorage.getItem('kaif_label_height_mm') || '', 10);
+                            if (storedH) heightMm = storedH;
+                        }
+                    } catch (e) { }
+                    widthMm = Math.max(20, Math.min(108, widthMm));
+                    heightMm = Math.max(15, Math.min(150, heightMm));
+                    return { widthMm: widthMm, heightMm: heightMm };
+                }
+
+                function ensureBarcodePrintArea() {
+                    var root = document.getElementById('barcode-print-area');
+                    if (!root) {
+                        root = document.createElement('div');
+                        root.id = 'barcode-print-area';
+                        root.setAttribute('aria-hidden', 'true');
+                        document.body.appendChild(root);
+                    }
+                    return root;
+                }
+
+                function setBarcodePageSize(widthMm, heightMm) {
+                    var id = 'store-barcode-page-size';
+                    var el = document.getElementById(id);
+                    if (!el) {
+                        el = document.createElement('style');
+                        el.id = id;
+                        document.head.appendChild(el);
+                    }
+                    el.textContent = '@page { size: ' + widthMm + 'mm ' + heightMm + 'mm; margin: 0; }';
+                }
+
+                function cleanupBarcodePrint() {
+                    var root = document.getElementById('barcode-print-area');
+                    if (root) root.innerHTML = '';
+                }
+
+                function renderBarcodePrint(dataUrl, count, options) {
+                    var copies = Math.max(1, Math.min(500, parseInt(count, 10) || 1));
+                    var size = readLabelSize(options);
+                    setBarcodePageSize(size.widthMm, size.heightMm);
+                    var root = ensureBarcodePrintArea();
+                    root.style.setProperty('--barcode-label-w', size.widthMm + 'mm');
+                    root.style.setProperty('--barcode-label-h', size.heightMm + 'mm');
+                    var html = '';
+                    for (var i = 0; i < copies; i++) {
+                        html += '<div class="barcode-label-page"><img src="' + dataUrl + '" alt="Barcode label" /></div>';
+                    }
+                    root.innerHTML = html;
+                    var imgs = root.querySelectorAll('img');
+                    if (!imgs.length) return false;
+                    var loaded = 0;
+                    var printed = false;
+                    var tryPrint = function () {
+                        loaded++;
+                        if (loaded >= imgs.length && !printed) {
+                            printed = true;
+                            window.print();
+                        }
+                    };
+                    for (var j = 0; j < imgs.length; j++) {
+                        if (imgs[j].complete) tryPrint();
+                        else {
+                            imgs[j].onload = tryPrint;
+                            imgs[j].onerror = tryPrint;
+                        }
+                    }
+                    return true;
+                }
+
+                window.storePrintBarcodeLabelSize = function (widthMm, heightMm) {
+                    try {
+                        localStorage.setItem('kaif_label_width_mm', String(Math.max(20, Math.min(108, widthMm))));
+                        localStorage.setItem('kaif_label_height_mm', String(Math.max(15, Math.min(150, heightMm))));
+                    } catch (e) { }
+                };
+
+                window.storePrintBarcodeCancel = function () {
+                    cleanupBarcodePrint();
+                    return true;
+                };
+
+                window.storePrintBarcodeBegin = function () {
+                    return true;
+                };
+
+                window.storePrintBarcodeFinishPending = function (dataUrl, count, options) {
+                    return renderBarcodePrint(dataUrl, count, options);
+                };
+
+                window.storePrintBarcode = function (dataUrl, count, options) {
+                    return renderBarcodePrint(dataUrl, count, options);
+                };
+
+                window.addEventListener('afterprint', cleanupBarcodePrint);
+            })();
         })();
     </script>
 </head>
 
 <body class="bg-slate-950 text-slate-100 antialiased">
     <div id="app">Loading…</div>
-    <script src="js/barcodePrint.js"></script>
     <script src="_framework/blazor.webview.js"></script>
 </body>
 

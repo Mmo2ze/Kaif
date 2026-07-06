@@ -9,6 +9,9 @@ public class StoreSettings
 
     public string CurrencyLabel { get; set; } = "EGP";
 
+    /// <summary>Store address printed on receipts below the store name (optional).</summary>
+    public string ReceiptAddress { get; set; } = "";
+
     /// <summary>Landline printed on thermal receipt footer (optional).</summary>
     public string ReceiptLandline { get; set; } = "";
 

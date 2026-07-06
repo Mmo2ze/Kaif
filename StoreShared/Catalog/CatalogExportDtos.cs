@@ -7,10 +7,14 @@ public sealed record CatalogExportFileDto(
     [property: JsonPropertyName("exportedAtUtc")] DateTime ExportedAtUtc,
     [property: JsonPropertyName("products")] IReadOnlyList<CatalogExportProductDto> Products);
 
-/// <summary>Product name and size list only (no stock or prices in export).</summary>
+/// <summary>Product name, prices, and stock (no sizes).</summary>
 public sealed record CatalogExportProductDto(
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("sizes")] IReadOnlyList<ClothingSize> Sizes,
+    [property: JsonPropertyName("buyPrice")] decimal BuyPrice,
+    [property: JsonPropertyName("unitPrice")] decimal UnitPrice,
+    [property: JsonPropertyName("salePrice")] decimal? SalePrice,
+    [property: JsonPropertyName("stock")] int Stock,
+    [property: JsonPropertyName("sizes")] IReadOnlyList<ClothingSize>? Sizes = null,
     [property: JsonPropertyName("skus")] IReadOnlyList<CatalogExportSkuDto>? Skus = null);
 
 /// <summary>Legacy import shape; stock and other fields are ignored.</summary>

@@ -11,4 +11,6 @@ public sealed record ReceiptDto(
     decimal Subtotal,
     decimal Discount,
     decimal Tax,
-    decimal Total);
+    decimal Total,
+    decimal SubtotalBeforeSale = 0,
+    decimal SaleDiscount = 0);

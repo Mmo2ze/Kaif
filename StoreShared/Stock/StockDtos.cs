@@ -6,7 +6,6 @@ public sealed record StockRowDto(
     int SkuId,
     int ProductModelId,
     string ModelName,
-    ClothingSize Size,
     string Barcode,
     string BarcodePngBase64,
     int Stock);

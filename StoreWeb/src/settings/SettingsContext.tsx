@@ -12,6 +12,7 @@ import type { PosSettingsDto } from '../types';
 const defaults: PosSettingsDto = {
   storeName: 'Kaif Store',
   currencyLabel: 'EGP',
+  receiptAddress: '',
   receiptLandline: '',
   receiptPhone: '',
   lowStockThreshold: 5,

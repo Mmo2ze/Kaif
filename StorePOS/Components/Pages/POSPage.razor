@@ -38,7 +38,6 @@
                         <thead>
                         <tr>
                             <th>Product</th>
-                            <th>Size</th>
                             <th class="col-narrow">Qty</th>
                             <th class="col-price">Unit</th>
                             <th class="col-price">Line</th>
@@ -50,7 +49,6 @@
                         {
                             <tr>
                                 <td>@line.ProductName</td>
-                                <td>@line.Size</td>
                                 <td class="col-narrow">
                                     <input type="number" class="input pos-qty-input touch-input"
                                            min="1"
@@ -68,7 +66,7 @@
                         </tbody>
                         <tfoot>
                         <tr class="pos-subtotal-row">
-                            <td colspan="4" class="text-right"><strong>Subtotal</strong></td>
+                            <td colspan="3" class="text-right"><strong>Subtotal</strong></td>
                             <td class="col-price"><strong>@MoneyFormat.Format(CartSubtotal, StoreSettings.CurrencyLabel)</strong></td>
                             <td></td>
                         </tr>
@@ -174,6 +172,10 @@
             <div id="receipt-print-area" class="receipt-printable">
                 <div class="receipt-header">
                     <strong>@StoreSettings.StoreName</strong>
+                    @if (!string.IsNullOrWhiteSpace(StoreSettings.ReceiptAddress))
+                    {
+                        <div class="muted small receipt-address">@StoreSettings.ReceiptAddress</div>
+                    }
                     <div class="muted receipt-meta">@_receipt.When.ToLocalTime().ToString("g")</div>
                     <div class="muted">Cashier: @_receipt.Cashier</div>
                     <div class="muted">Sale #@_receipt.SaleId</div>
@@ -184,14 +186,26 @@
                     {
                         <tr>
                             <td>
-                                <div>@line.ProductName <span class="muted">(@line.Size)</span></div>
-                                <div class="muted small">@line.Qty × @MoneyFormat.Format(line.UnitPrice, StoreSettings.CurrencyLabel)</div>
+                                <div>@line.ProductName</div>
+                                <div class="muted small">
+                                    @line.Qty × @MoneyFormat.Format(line.UnitPrice, StoreSettings.CurrencyLabel)
+                                    @if (line.IsOnSale)
+                                    {
+                                        <span> (was @MoneyFormat.Format(line.RegularUnitPrice, StoreSettings.CurrencyLabel))</span>
+                                    }
+                                </div>
                             </td>
                             <td class="receipt-line-total">@MoneyFormat.Format(line.LineTotal, StoreSettings.CurrencyLabel)</td>
                         </tr>
                     }
                     </tbody>
                 </table>
+                @if (_receipt.SaleDiscount > 0)
+                {
+                    <div class="receipt-summary-row"><span>Total w/o sale</span><span>@MoneyFormat.Format(_receipt.SubtotalBeforeSale, StoreSettings.CurrencyLabel)</span></div>
+                    <div class="receipt-summary-row"><span>Sale discount</span><span>- @MoneyFormat.Format(_receipt.SaleDiscount, StoreSettings.CurrencyLabel)</span></div>
+                }
+                <div class="receipt-summary-row"><span>Subtotal</span><span>@MoneyFormat.Format(_receipt.Subtotal, StoreSettings.CurrencyLabel)</span></div>
                 @if (_receipt.Discount > 0)
                 {
                     <div class="receipt-summary-row"><span>Discount</span><span>- @MoneyFormat.Format(_receipt.Discount, StoreSettings.CurrencyLabel)</span></div>
@@ -235,6 +249,10 @@
     private bool DiscountUiEnabled => IsAdmin || _allowSellerDiscount || _discountUnlocked;
 
     private decimal CartSubtotal => _cart.Sum(l => l.LineTotal);
+
+    private decimal CartSubtotalBeforeSale => _cart.Sum(l => l.RegularLineTotal);
+
+    private decimal SaleDiscountAmount => Math.Max(0, CartSubtotalBeforeSale - CartSubtotal);
 
     private decimal DiscountAmount
     {
@@ -355,10 +373,10 @@
             {
                 SkuId = sku.Id,
                 ProductName = sku.ProductName ?? "Product",
-                Size = sku.Size,
                 Barcode = sku.Barcode,
                 Qty = 1,
                 UnitPrice = Pricing.Effective(sku.UnitPrice, sku.SalePrice),
+                RegularUnitPrice = sku.UnitPrice,
                 MaxStock = sku.Stock,
             });
         }
@@ -383,6 +401,7 @@
                 if (fresh is null)
                     continue;
                 line.MaxStock = fresh.Stock;
+                line.RegularUnitPrice = fresh.UnitPrice;
                 line.UnitPrice = Pricing.Effective(fresh.UnitPrice, fresh.SalePrice);
                 if (line.Qty > line.MaxStock)
                     line.Qty = Math.Max(1, line.MaxStock);
@@ -525,13 +544,15 @@
                 {
                     SkuId = l.SkuId,
                     ProductName = l.ProductName,
-                    Size = l.Size,
                     Barcode = l.Barcode,
                     Qty = l.Qty,
                     UnitPrice = l.UnitPrice,
+                    RegularUnitPrice = l.RegularUnitPrice,
                     MaxStock = l.MaxStock,
                 }).ToList(),
                 CartSubtotal,
+                CartSubtotalBeforeSale,
+                SaleDiscountAmount,
                 disc,
                 result.TotalAmount);
 
@@ -577,15 +598,16 @@
                 _receipt.SaleId,
                 _receipt.When,
                 StoreSettings.StoreName,
-                storeAddress: null,
+                storeAddress: string.IsNullOrWhiteSpace(StoreSettings.ReceiptAddress) ? null : StoreSettings.ReceiptAddress,
                 StoreSettings.ReceiptLandline,
                 StoreSettings.ReceiptPhone,
                 _receipt.Lines.Select(l => new ReceiptPrintHelper.ReceiptLineInput(
                     l.ProductName,
-                    l.Size.ToString(),
+                    "",
                     l.Qty,
                     l.UnitPrice,
-                    l.LineTotal)),
+                    l.LineTotal,
+                    l.IsOnSale ? l.RegularUnitPrice : null)),
                 _receipt.Subtotal,
                 _receipt.Discount,
                 _receipt.Total,
@@ -669,12 +691,14 @@
     {
         public int SkuId { get; set; }
         public string ProductName { get; set; } = "";
-        public ClothingSize Size { get; set; }
         public string Barcode { get; set; } = "";
         public int Qty { get; set; }
         public decimal UnitPrice { get; set; }
+        public decimal RegularUnitPrice { get; set; }
         public int MaxStock { get; set; }
         public decimal LineTotal => UnitPrice * Qty;
+        public decimal RegularLineTotal => RegularUnitPrice * Qty;
+        public bool IsOnSale => RegularUnitPrice > UnitPrice;
     }
 
     private sealed record ReceiptSnapshot(
@@ -684,6 +708,8 @@
         string Cashier,
         IReadOnlyList<CartLine> Lines,
         decimal Subtotal,
+        decimal SubtotalBeforeSale,
+        decimal SaleDiscount,
         decimal Discount,
         decimal Total);
 }

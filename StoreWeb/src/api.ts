@@ -7,7 +7,6 @@ import type {
   CreateProductModelRequest,
   UpdateProductModelRequest,
   CreateSaleRequest,
-  CreateSkuRequest,
   CreateUserRequest,
   CurrentUserDto,
   LoginRequest,
@@ -16,20 +15,22 @@ import type {
   PagedStockAdjustmentsResult,
   PosSettingsDto,
   ProductModelSummaryDto,
-  ProductSkuListRowDto,
   RefundRequestDto,
   RefundResultDto,
+  EnqueueLabelPrintRequest,
+  EnqueueLabelPrintResponse,
+  LabelPrintQueueStatusDto,
   ResetPasswordRequest,
   SaleByReceiptDto,
   SaleCreatedDto,
   SaleHistoryDetailDto,
   SalesSummaryDto,
   SetStockRequest,
+  AdjustStockRequest,
   SkuDetailDto,
   StockRowDto,
   UpdateProductPriceRequest,
   UserAdminRowDto,
-  AdjustStockRequest,
 } from './types';
 
 const TOKEN_KEY = 'storeweb_token';
@@ -111,6 +112,22 @@ export async function updateBackupSettings(body: BackupSettingsUpdateDto): Promi
 
 export async function runBackupNow(): Promise<BackupRunResponse> {
   return apiFetch<BackupRunResponse>('/api/backup/run-now', { method: 'POST' });
+}
+
+export async function downloadBackupArchive(): Promise<{ fileName: string; blob: Blob }> {
+  const token = getStoredToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch('/api/backup/download', { headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const fileName = match?.[1]?.trim() || 'store-backup.zip';
+  return { fileName, blob };
 }
 
 export async function restoreDatabaseBackup(file: File): Promise<BackupRunResponse> {
@@ -228,6 +245,14 @@ export async function importProductsCatalog(file: File): Promise<CatalogImportRe
   return body;
 }
 
+export async function setProductStock(productId: number, body: SetStockRequest): Promise<void> {
+  await apiFetch(`/api/products/${productId}/stock`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function addProductStock(productId: number, body: AdjustStockRequest): Promise<void> {
+  await apiFetch(`/api/products/${productId}/stock/add`, { method: 'POST', body: JSON.stringify(body) });
+}
+
 export async function createProduct(body: CreateProductModelRequest): Promise<void> {
   await apiFetch('/api/products', { method: 'POST', body: JSON.stringify(body) });
 }
@@ -240,20 +265,8 @@ export async function deleteProduct(id: number): Promise<void> {
   await apiFetch(`/api/products/${id}`, { method: 'DELETE' });
 }
 
-export async function deleteSku(id: number): Promise<void> {
-  await apiFetch(`/api/skus/${id}`, { method: 'DELETE' });
-}
-
-export async function createSku(body: CreateSkuRequest): Promise<SkuDetailDto> {
-  return apiFetch<SkuDetailDto>('/api/skus', { method: 'POST', body: JSON.stringify(body) });
-}
-
 export async function updateProductPrice(modelId: number, body: UpdateProductPriceRequest): Promise<void> {
   await apiFetch(`/api/products/${modelId}/price`, { method: 'PUT', body: JSON.stringify(body) });
-}
-
-export async function getProductSkus(modelId: number): Promise<ProductSkuListRowDto[]> {
-  return apiFetch<ProductSkuListRowDto[]>(`/api/products/${modelId}/skus`);
 }
 
 export async function getUsers(): Promise<UserAdminRowDto[]> {
@@ -266,6 +279,26 @@ export async function createUser(body: CreateUserRequest): Promise<void> {
 
 export async function resetPassword(userId: number, body: ResetPasswordRequest): Promise<void> {
   await apiFetch(`/api/users/${userId}/password`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function enqueueLabelPrint(body: EnqueueLabelPrintRequest): Promise<EnqueueLabelPrintResponse> {
+  return apiFetch<EnqueueLabelPrintResponse>('/api/print/labels', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getLabelPrintQueueStatus(): Promise<LabelPrintQueueStatusDto> {
+  return apiFetch<LabelPrintQueueStatusDto>('/api/print/labels/status');
+}
+
+export async function isLabelPrintJobPending(jobId: string): Promise<boolean> {
+  const res = await fetch(`/api/print/labels/${encodeURIComponent(jobId)}/pending`, {
+    headers: getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {},
+  });
+  if (res.status === 204) return false;
+  if (res.ok) return true;
+  throw new Error(await res.text());
 }
 
 export async function deactivateUser(userId: number): Promise<void> {

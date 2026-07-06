@@ -74,13 +74,14 @@
                         {
                             <li>
                                 <span>@line.ProductName @line.Size × @line.QuantityAvailable</span>
-                                <span>@MoneyFormat.Format(line.UnitPrice * line.QuantityAvailable, StoreSettings.CurrencyLabel)</span>
+                                <span>@MoneyFormat.Format(line.RefundLineTotal, StoreSettings.CurrencyLabel)</span>
                             </li>
                         }
                     </ul>
                 }
                 else
                 {
+                    <p class="muted small">Enter refund qty per line. Amount includes sale discount (e.g. % off).</p>
                     <div class="table-wrap refund-lines-table">
                         <table>
                             <thead>
@@ -93,17 +94,19 @@
                             </tr>
                             </thead>
                             <tbody>
-                            @foreach (var line in _partialLines)
+                            @for (var i = 0; i < _partialLines.Count; i++)
                             {
+                                var idx = i;
+                                var line = _partialLines[idx];
                                 <tr class="@(line.HasError ? "refund-line-error" : "")">
                                     <td>@line.ProductName</td>
                                     <td>@line.Size</td>
                                     <td class="col-num">@line.Available</td>
                                     <td class="col-num">
                                         <input type="number" class="input" min="0" max="@line.Available"
-                                               @bind="line.RefundQty" @bind:after="RecalcRefundTotal" />
+                                               @bind="_partialLines[idx].RefundQty" @bind:after="RecalcRefundTotal" />
                                     </td>
-                                    <td class="col-money">@MoneyFormat.Format(line.LineAmount, StoreSettings.CurrencyLabel)</td>
+                                    <td class="col-money">@FormatPartialLineAmount(line)</td>
                                 </tr>
                             }
                             </tbody>
@@ -216,10 +219,42 @@
         }
     }
 
+    private string FormatPartialLineAmount(PartialLine line)
+    {
+        if (line.RefundQty > 0)
+            return MoneyFormat.Format(line.LineAmount, StoreSettings.CurrencyLabel);
+
+        if (line.Available <= 0)
+            return "—";
+
+        var oneUnit = RefundPricingCalculator.ComputeRefundAmount(
+            line.NetLineTotal,
+            line.OriginalQuantity,
+            1,
+            line.OriginalQuantity - line.Available,
+            line.AlreadyRefundedAmount);
+        if (line.Available == 1)
+            return MoneyFormat.Format(oneUnit, StoreSettings.CurrencyLabel);
+
+        return $"1× {MoneyFormat.Format(oneUnit, StoreSettings.CurrencyLabel)}";
+    }
+
     private void SetRefundType(RefundType type)
     {
         _refundType = type;
+        if (type == RefundType.Partial)
+            PrefillSinglePartialLine();
         RecalcRefundTotal();
+    }
+
+    private void PrefillSinglePartialLine()
+    {
+        if (_partialLines.Any(l => l.RefundQty > 0))
+            return;
+
+        var refundable = _partialLines.Where(l => l.Available > 0).ToList();
+        if (refundable.Count == 1 && refundable[0].Available == 1)
+            refundable[0].RefundQty = 1;
     }
 
     private void RecalcRefundTotal()
@@ -236,14 +271,20 @@
             var noPriorRefunds = _sale.Lines.All(l => l.AlreadyRefunded == 0);
             _refundPreviewAmount = noPriorRefunds && available.Count == _sale.Lines.Count
                 ? _sale.TotalAmount
-                : available.Sum(l => l.UnitPrice * l.QuantityAvailable);
+                : available.Sum(l => l.RefundLineTotal);
             return;
         }
 
         foreach (var line in _partialLines)
         {
             line.HasError = line.RefundQty > line.Available;
-            line.LineAmount = line.RefundQty * line.UnitPrice;
+            var alreadyQty = line.OriginalQuantity - line.Available;
+            line.LineAmount = RefundPricingCalculator.ComputeRefundAmount(
+                line.NetLineTotal,
+                line.OriginalQuantity,
+                line.RefundQty,
+                alreadyQty,
+                line.AlreadyRefundedAmount);
         }
 
         _refundPreviewAmount = _partialLines.Where(l => !l.HasError).Sum(l => l.LineAmount);
@@ -277,8 +318,20 @@
                     SkuId = line.SkuId,
                     ProductName = line.ProductName,
                     Size = line.Size,
+                    OriginalQuantity = line.OriginalQuantity,
                     Available = line.QuantityAvailable,
+                    AlreadyRefundedAmount = line.AlreadyRefundedAmount,
                     UnitPrice = line.UnitPrice,
+                    NetLineTotal = RefundPricingCalculator.ResolveNetLineTotal(
+                        line.NetLineTotal,
+                        line.RefundUnitPrice,
+                        line.RefundLineTotal,
+                        line.OriginalQuantity,
+                        line.QuantityAvailable,
+                        line.AlreadyRefunded,
+                        line.UnitPrice),
+                    RefundUnitPrice = line.RefundUnitPrice,
+                    MaxForAvailable = line.RefundLineTotal,
                     RefundQty = 0,
                 });
             }
@@ -397,7 +450,7 @@
                     l.Size,
                     l.QuantityAvailable,
                     l.UnitPrice,
-                    l.UnitPrice * l.QuantityAvailable))
+                    l.RefundLineTotal))
                 .ToList();
         }
 
@@ -463,9 +516,14 @@
         public int SkuId { get; set; }
         public string ProductName { get; set; } = "";
         public string Size { get; set; } = "";
+        public int OriginalQuantity { get; set; }
         public int Available { get; set; }
+        public decimal AlreadyRefundedAmount { get; set; }
         public int RefundQty { get; set; }
         public decimal UnitPrice { get; set; }
+        public decimal NetLineTotal { get; set; }
+        public decimal MaxForAvailable { get; set; }
+        public decimal RefundUnitPrice { get; set; }
         public decimal LineAmount { get; set; }
         public bool HasError { get; set; }
     }

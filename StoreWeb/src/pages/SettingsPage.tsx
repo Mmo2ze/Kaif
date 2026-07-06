@@ -9,6 +9,7 @@ export function SettingsPage() {
   const [model, setModel] = useState<PosSettingsDto>({
     storeName: '',
     currencyLabel: 'EGP',
+    receiptAddress: '',
     receiptLandline: '',
     receiptPhone: '',
     lowStockThreshold: 5,
@@ -31,6 +32,7 @@ export function SettingsPage() {
       setModel({
         storeName: settings.storeName,
         currencyLabel: settings.currencyLabel,
+        receiptAddress: settings.receiptAddress,
         receiptLandline: settings.receiptLandline,
         receiptPhone: settings.receiptPhone,
         lowStockThreshold: settings.lowStockThreshold,
@@ -90,6 +92,28 @@ export function SettingsPage() {
     }
   };
 
+  const downloadBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const { fileName, blob } = await api.downloadBackupArchive();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`Downloaded ${fileName}`);
+      setStatusError(false);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Download failed');
+      setStatusError(true);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
   const restoreBackup = async () => {
     if (!restoreFile) return;
     if (!window.confirm('Restore database from this backup? All current store data will be replaced. Continue?')) return;
@@ -123,6 +147,18 @@ export function SettingsPage() {
         <div className="field">
           <label htmlFor="set-curr">Currency</label>
           <input id="set-curr" className="input touch-input" maxLength={32} value={model.currencyLabel} onChange={(e) => setModel((m) => ({ ...m, currencyLabel: e.target.value }))} />
+        </div>
+        <div className="field">
+          <label htmlFor="set-address">Receipt address</label>
+          <textarea
+            id="set-address"
+            className="input touch-input"
+            maxLength={512}
+            rows={3}
+            value={model.receiptAddress}
+            onChange={(e) => setModel((m) => ({ ...m, receiptAddress: e.target.value }))}
+            placeholder="Street, city — printed below store name"
+          />
         </div>
         <div className="field">
           <label htmlFor="set-landline">Receipt landline</label>
@@ -165,11 +201,14 @@ export function SettingsPage() {
           <button type="button" className="btn primary touch-target" disabled={backupBusy} onClick={() => void runBackup()}>
             Run now
           </button>
+          <button type="button" className="btn secondary touch-target" disabled={backupBusy} onClick={() => void downloadBackup()}>
+            Download .zip
+          </button>
         </div>
       </div>
       <h2 className="section-title">Restore from backup</h2>
       <p className="muted">
-        Upload a <code>store-backup-….zip</code> from Discord (or a <code>.db</code> file). This replaces the current database. A safety copy is saved in <code>backups/pre-restore-….zip</code> first.
+        Choose any backup file: a <code>store-backup-….zip</code>, a <code>.db</code> file, or a Discord download (macOS may save the zip as <code>.db</code> — that still works). A safety copy is saved in <code>backups/pre-restore-….zip</code> first.
       </p>
       <div className="card">
         <div className="field">
@@ -178,7 +217,6 @@ export function SettingsPage() {
             id="restore-file"
             type="file"
             className="input touch-input"
-            accept=".zip,.db,application/zip"
             disabled={restoreBusy}
             onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
           />

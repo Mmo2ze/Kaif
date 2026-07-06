@@ -30,7 +30,18 @@ public sealed class BackupController : ControllerBase
     public Task<BackupRunResponse> RunNow(CancellationToken ct) =>
         _backupRunner.RunOnceAsync(ct);
 
-    /// <summary>Replace the live database with an uploaded Discord backup (.zip) or .db file.</summary>
+    /// <summary>Download a fresh store-backup-….zip (same archive sent to Discord).</summary>
+    [HttpGet("download")]
+    public async Task<IActionResult> Download(CancellationToken ct)
+    {
+        var archive = await _backupRunner.CreateArchiveAsync(ct);
+        if (!archive.Success || archive.Content is null || string.IsNullOrWhiteSpace(archive.FileName))
+            return BadRequest(new BackupRunResponse(false, archive.Message ?? "Could not create backup file."));
+
+        return File(archive.Content, "application/zip", archive.FileName);
+    }
+
+    /// <summary>Replace the live database with an uploaded backup (.zip, .db, or Discord download).</summary>
     [HttpPost("restore")]
     public async Task<BackupRunResponse> Restore(IFormFile? file, CancellationToken ct)
     {

@@ -8,7 +8,6 @@ import { LoginPage } from './pages/LoginPage';
 import { MorePage } from './pages/MorePage';
 import { ProductsPage } from './pages/ProductsPage';
 import { SellerNoticePage } from './pages/SellerNoticePage';
-import { StockPage } from './pages/StockPage';
 
 export default function App() {
   return (
@@ -21,13 +20,13 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<AppShell />}>
                 <Route path="/seller" element={<SellerNoticePage />} />
+                <Route path="/products" element={<ProductsPage />} />
+                <Route path="/stock" element={<Navigate to="/products" replace />} />
               </Route>
             </Route>
             <Route element={<ProtectedRoute adminOnly />}>
               <Route element={<AppShell />}>
                 <Route path="/home" element={<HomePage />} />
-                <Route path="/stock" element={<StockPage />} />
-                <Route path="/products" element={<ProductsPage />} />
                 <Route path="/more" element={<MorePage />} />
                 <Route path="/pos" element={<Navigate to="/home" replace />} />
                 <Route path="/sales" element={<Navigate to="/home" replace />} />

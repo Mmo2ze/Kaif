@@ -54,11 +54,6 @@ public sealed class DatabaseRestoreService : IDatabaseRestoreService
         if (string.IsNullOrWhiteSpace(safeName))
             return new BackupRunResponse(false, "Invalid file name.");
 
-        var ext = Path.GetExtension(safeName);
-        if (!ext.Equals(".zip", StringComparison.OrdinalIgnoreCase) &&
-            !ext.Equals(".db", StringComparison.OrdinalIgnoreCase))
-            return new BackupRunResponse(false, "Upload a .zip backup from Discord or a .db SQLite file.");
-
         var workDir = Path.Combine(Path.GetTempPath(), $"store-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDir);
 
@@ -71,9 +66,20 @@ public sealed class DatabaseRestoreService : IDatabaseRestoreService
             if (new FileInfo(uploadedPath).Length > MaxUploadBytes)
                 return new BackupRunResponse(false, "Backup file is too large (max 25 MB).");
 
-            var sourceDbPath = ext.Equals(".zip", StringComparison.OrdinalIgnoreCase)
-                ? ExtractDatabaseFromZip(uploadedPath, workDir)
-                : uploadedPath;
+            var format = await BackupUploadFormat.DetectAsync(uploadedPath, cancellationToken);
+            string sourceDbPath;
+            switch (format)
+            {
+                case BackupUploadFormat.Kind.Zip:
+                    sourceDbPath = ExtractDatabaseFromZip(uploadedPath, workDir);
+                    break;
+                case BackupUploadFormat.Kind.Sqlite:
+                    sourceDbPath = uploadedPath;
+                    break;
+                default:
+                    return new BackupRunResponse(false,
+                        "Unrecognized backup file. Choose a store-backup .zip, a .db SQLite file, or a Discord download (even if it was saved as .db).");
+            }
 
             if (!await IsSqliteDatabaseAsync(sourceDbPath, cancellationToken))
                 return new BackupRunResponse(false, "The file is not a valid SQLite database.");
@@ -81,7 +87,7 @@ public sealed class DatabaseRestoreService : IDatabaseRestoreService
             await RestoreLock.WaitAsync(cancellationToken);
             try
             {
-                var liveDbPath = SqlitePathHelper.ResolveDatabaseFilePath(_configuration, _environment);
+                var liveDbPath = SqlitePathHelper.ResolveDatabaseFilePath(_configuration, _environment.ContentRootPath);
                 await CloseLiveConnectionsAsync(cancellationToken);
                 await CreatePreRestoreSafetyBackupAsync(liveDbPath, cancellationToken);
                 await CopyDatabaseOverLiveAsync(sourceDbPath, liveDbPath, cancellationToken);

@@ -150,6 +150,7 @@ public class StoreDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.StoreName).HasMaxLength(256);
             e.Property(x => x.CurrencyLabel).HasMaxLength(32);
+            e.Property(x => x.ReceiptAddress).HasMaxLength(512);
             e.Property(x => x.ReceiptLandline).HasMaxLength(64);
             e.Property(x => x.ReceiptPhone).HasMaxLength(64);
             e.Property(x => x.DiscordBackupWebhookUrl).HasMaxLength(2048);

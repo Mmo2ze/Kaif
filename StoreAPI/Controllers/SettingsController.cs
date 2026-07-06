@@ -47,6 +47,7 @@ public sealed class SettingsController : ControllerBase
         row.CurrencyLabel = body.CurrencyLabel.Trim();
         row.LowStockThreshold = body.LowStockThreshold;
         row.AllowSellerDiscount = body.AllowSellerDiscount;
+        row.ReceiptAddress = body.ReceiptAddress?.Trim() ?? "";
         row.ReceiptLandline = body.ReceiptLandline?.Trim() ?? "";
         row.ReceiptPhone = body.ReceiptPhone?.Trim() ?? "";
 

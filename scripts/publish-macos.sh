@@ -16,14 +16,63 @@ else
 fi
 
 STORE_WEB="$ROOT/StoreWeb"
-PUBLISH_OUT="$ROOT/StorePOS/bin/$CONFIGURATION/$TFM/$RID/publish"
+MAC_BUILD="$ROOT/StorePOS/bin/$CONFIGURATION/$TFM/$RID"
+PUBLISH_OUT="$MAC_BUILD/publish"
 DIST_OUT="$ROOT/dist/StorePOS-macOS"
+
+clear_mac_build() {
+  if [[ ! -e "$MAC_BUILD" ]]; then
+    return 0
+  fi
+  if rm -rf "$MAC_BUILD" 2>/dev/null; then
+    return 0
+  fi
+  echo "Cannot clear old Mac Catalyst build output (often root-owned after sudo):" >&2
+  echo "  sudo chown -R \$(whoami) \"$MAC_BUILD\"" >&2
+  echo "  rm -rf \"$MAC_BUILD\"" >&2
+  echo "Then run ./scripts/publish-macos.sh again." >&2
+  exit 1
+}
+
+clear_dist_out() {
+  local stage="${DIST_OUT}.staging.$$"
+  local backup="${DIST_OUT}.old.$$"
+
+  rm -rf "$stage"
+  mkdir -p "$stage"
+  cp -R "$PUBLISH_OUT/"* "$stage/"
+  chmod +x "$stage/RunStore.sh" 2>/dev/null || true
+
+  rm -rf "$backup"
+  if [[ -e "$DIST_OUT" ]]; then
+    if mv "$DIST_OUT" "$backup" 2>/dev/null; then
+      :
+    elif rm -rf "$DIST_OUT" 2>/dev/null; then
+      :
+    else
+      chmod -R u+w "$DIST_OUT" 2>/dev/null || true
+      chflags -R nouchg "$DIST_OUT" 2>/dev/null || true
+      if ! rm -rf "$DIST_OUT" 2>/dev/null; then
+        rm -rf "$stage"
+        echo "Cannot replace $DIST_OUT (Store POS may still be running)." >&2
+        echo "  Quit Store POS completely, then run:" >&2
+        echo "  rm -rf \"$DIST_OUT\"" >&2
+        echo "  ./scripts/publish-macos.sh" >&2
+        exit 1
+      fi
+    fi
+  fi
+
+  mv "$stage" "$DIST_OUT"
+  rm -rf "$backup" &
+}
 
 test_publish_output() {
   local folder="$1"
   local app="$folder/Store POS.app"
   local missing=()
   [[ -d "$app" ]] || missing+=("Store POS.app")
+  [[ -f "$app/Contents/MacOS/StorePOS" ]] || missing+=("Store POS.app/Contents/MacOS/StorePOS")
   [[ -f "$app/Contents/MacOS/StoreAPI" ]] || missing+=("Store POS.app/Contents/MacOS/StoreAPI")
   [[ -f "$app/Contents/MacOS/browserwww/index.html" ]] || missing+=("Store POS.app/Contents/MacOS/browserwww/index.html")
   if ((${#missing[@]} > 0)); then
@@ -35,8 +84,9 @@ test_publish_output() {
 echo "=== Kaif Store - macOS publish ($RID) ==="
 echo
 
-if pgrep -x "Store POS" >/dev/null 2>&1 || pgrep -f "StoreAPI" >/dev/null 2>&1; then
-  echo "WARNING: Store POS or StoreAPI may still be running. Quit them first or the build may fail."
+if pgrep -x "Store POS" >/dev/null 2>&1 || pgrep -x "StoreAPI" >/dev/null 2>&1; then
+  echo "WARNING: Store POS or StoreAPI is still running."
+  echo "         Quit Store POS completely before publishing, or the old server may keep serving on port 5050."
   echo
 fi
 
@@ -68,6 +118,7 @@ else
 fi
 
 echo "[2/3] Publishing Store POS + StoreAPI (self-contained, $RID)..."
+clear_mac_build
 dotnet publish "$ROOT/StorePOS/StorePOS.csproj" \
   -f "$TFM" \
   -c "$CONFIGURATION" \
@@ -78,10 +129,7 @@ dotnet publish "$ROOT/StorePOS/StorePOS.csproj" \
 test_publish_output "$PUBLISH_OUT"
 
 echo "[3/3] Copying to dist/StorePOS-macOS..."
-rm -rf "$DIST_OUT"
-mkdir -p "$DIST_OUT"
-cp -R "$PUBLISH_OUT/"* "$DIST_OUT/"
-chmod +x "$DIST_OUT/RunStore.sh" 2>/dev/null || true
+clear_dist_out
 
 test_publish_output "$DIST_OUT"
 
@@ -95,10 +143,27 @@ echo "  Build output (same files):"
 echo "    $PUBLISH_OUT"
 echo
 echo "How to run:"
-echo "  1. Open the folder above"
-echo "  2. Double-click Store POS.app (or: ./RunStore.sh)"
+echo "  ./scripts/start-macos.sh"
+echo "  Or open the folder and double-click Store POS.app (or RunStore.sh in dist/)"
 echo "     -> StoreAPI starts automatically on port 5050"
 echo "     -> LAN web app: http://<this-Mac-IP>:5050"
 echo
-echo "Note: Native receipt/barcode printing uses the browser print dialog on macOS."
-echo "      Windows builds keep direct thermal printer support."
+echo "Note: Native barcode/receipt printing uses ESC/POS raw on macOS (same thermal path as Windows)."
+
+install_desktop_alias() {
+  local app="$DIST_OUT/Store POS.app"
+  [[ -d "$app" ]] || return 0
+  local desktop="$HOME/Desktop"
+  local label="Kaif Store POS.app"
+  rm -f "$desktop/$label" 2>/dev/null || true
+  osascript <<EOF 2>/dev/null || ln -sf "$app" "$desktop/$label"
+tell application "Finder"
+  set targetApp to POSIX file "$app"
+  set desktopFolder to POSIX file "$desktop"
+  make alias file to targetApp at desktopFolder with properties {name:"$label"}
+end tell
+EOF
+  echo "Desktop: $desktop/$label"
+}
+
+install_desktop_alias

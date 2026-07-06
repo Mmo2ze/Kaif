@@ -1030,6 +1030,11 @@ a {
     margin-bottom: 1rem;
 }
 
+.receipt-address {
+    white-space: pre-line;
+    margin-top: 0.25rem;
+}
+
 .receipt-meta {
     font-size: 0.9rem;
     margin-top: 0.25rem;
@@ -1074,13 +1079,25 @@ a {
     box-sizing: border-box;
 }
 
+#barcode-print-area {
+    position: fixed;
+    left: -10000px;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    pointer-events: none;
+}
+
 @media print {
     body * {
         visibility: hidden;
     }
 
     #receipt-print-area,
-    #receipt-print-area * {
+    #receipt-print-area *,
+    #barcode-print-area,
+    #barcode-print-area * {
         visibility: visible;
     }
 
@@ -1093,6 +1110,36 @@ a {
         color: #000;
         padding: 1rem;
         box-sizing: border-box;
+    }
+
+    #barcode-print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+    }
+
+    .barcode-label-page {
+        width: var(--barcode-label-w, 35mm);
+        height: var(--barcode-label-h, 25mm);
+        overflow: hidden;
+        page-break-after: always;
+        break-after: page;
+    }
+
+    .barcode-label-page:last-child {
+        page-break-after: auto;
+        break-after: auto;
+    }
+
+    .barcode-label-page img {
+        display: block;
+        width: var(--barcode-label-w, 35mm);
+        height: var(--barcode-label-h, 25mm);
+        object-fit: fill;
     }
 
     .no-print {

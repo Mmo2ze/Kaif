@@ -5,7 +5,8 @@ public sealed record CreateProductModelRequest(
     string? Description,
     decimal BuyPrice = 0,
     decimal UnitPrice = 0,
-    decimal? SalePrice = null);
+    decimal? SalePrice = null,
+    int InitialStock = 0);
 
 public sealed record UpdateProductModelRequest(string Name, string? Description);
 
@@ -17,19 +18,21 @@ public sealed record ProductModelSummaryDto(
     int Id,
     string Name,
     string? Description,
-    int SkuCount,
+    int SkuId,
+    string Barcode,
+    string BarcodePngBase64,
+    int Stock,
     decimal BuyPrice,
     decimal UnitPrice,
     decimal? SalePrice);
 
-/// <summary>SKU row for catalog lists without barcode PNG; prices live on the product model.</summary>
-public sealed record ProductSkuListRowDto(int Id, ClothingSize Size, string Barcode, int Stock);
+/// <summary>Legacy SKU row; prefer <see cref="ProductModelSummaryDto"/> (one product = one item).</summary>
+public sealed record ProductSkuListRowDto(int Id, string Barcode, int Stock);
 
 public sealed record SkuDetailDto(
     int Id,
     int ProductModelId,
     string? ProductName,
-    ClothingSize Size,
     string Barcode,
     string BarcodePngBase64,
     int Stock,

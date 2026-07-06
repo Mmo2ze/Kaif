@@ -1,5 +1,3 @@
-using System.Drawing;
-using System.Drawing.Text;
 using System.Text;
 using SkiaSharp;
 
@@ -7,9 +5,11 @@ using StoreShared.Receipt;
 
 using StoreShared.Sales;
 
+using StoreShared.Text;
 
 
-namespace StorePOS.Platforms.Windows;
+
+namespace StorePOS.Services;
 
 
 
@@ -112,18 +112,7 @@ public static class EscPosReceiptBuilder
 
 
         if (!string.IsNullOrWhiteSpace(receipt.StoreAddress))
-
-        {
-
-            W(ms, AlignCenter);
-
-            T(ms, Truncate(receipt.StoreAddress.Trim(), LineWidth));
-
-            Lf(ms);
-
-            Feed(ms, 1);
-
-        }
+            PrintStoreAddress(ms, receipt.StoreAddress);
 
 
 
@@ -186,6 +175,20 @@ public static class EscPosReceiptBuilder
 
 
         W(ms, AlignLeft);
+
+        if (receipt.SaleDiscount > 0)
+
+        {
+
+            T(ms, TotalsLine("Total w/o sale", $"{receipt.SubtotalBeforeSale:0.00} EGP"));
+
+            Lf(ms);
+
+            T(ms, TotalsLine("Sale discount", $"-{receipt.SaleDiscount:0.00} EGP"));
+
+            Lf(ms);
+
+        }
 
         T(ms, TotalsLine("Subtotal", $"{receipt.Subtotal:0.00} EGP"));
 
@@ -432,10 +435,10 @@ public static class EscPosReceiptBuilder
 
     private const float ReceiptItemFontPt = 15f;
 
-    private const float ReceiptFooterFontPt = 11f;
+    private const float ReceiptFooterFontPt = 12.5f;
 
     private const string RefundPolicyAr =
-        "يحق للعميل الاسترجاع أو الاستبدال خلال 7 أيام بشرط وجود الفاتورة وأن يكون المنتج بحالته الأصلية";
+        "يحق للعميل الاسترجاع أو الاستبدال خلال ٧ أيام بشرط وجود الفاتورة وأن يكون المنتج بحالته الأصلية";
 
     private const int LogoMaxHeightDots = 240;
 
@@ -452,7 +455,9 @@ public static class EscPosReceiptBuilder
             if (!File.Exists(path))
                 return null;
 
-            using var src = System.Drawing.Image.FromFile(path);
+            using var src = SKBitmap.Decode(path);
+            if (src is null)
+                return null;
 
             var scale = Math.Min(1.0, Math.Min(
                 (double)LogoMaxWidthDots / src.Width,
@@ -460,15 +465,17 @@ public static class EscPosReceiptBuilder
             var w = Math.Max(1, (int)Math.Round(src.Width * scale));
             var h = Math.Max(1, (int)Math.Round(src.Height * scale));
 
-            using var bmp = new System.Drawing.Bitmap(w, h);
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            using var bmp = new SKBitmap(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
+            using (var canvas = new SKCanvas(bmp))
             {
-                g.Clear(System.Drawing.Color.White);
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.DrawImage(src, 0, 0, w, h);
+                canvas.Clear(SKColors.White);
+                var dest = SKRect.Create(0, 0, w, h);
+                var srcRect = SKRect.Create(0, 0, src.Width, src.Height);
+                using var paint = new SKPaint { FilterQuality = SKFilterQuality.High };
+                canvas.DrawBitmap(src, srcRect, dest, paint);
             }
 
-            return BitmapToEscPosRaster(bmp);
+            return EscPosRasterEncoder.ToEscPosRaster(bmp);
         }
         catch
         {
@@ -592,11 +599,46 @@ public static class EscPosReceiptBuilder
 
         using var bitmap = SKBitmap.FromImage(image);
 
-        return bitmap is null ? null : SkBitmapToEscPosRaster(bitmap);
+        return bitmap is null ? null : EscPosRasterEncoder.ToEscPosRaster(bitmap);
 
     }
 
 
+
+    private static void PrintStoreAddress(MemoryStream ms, string address)
+    {
+        W(ms, AlignCenter);
+        foreach (var line in WrapPlainText(address, LineWidth))
+        {
+            T(ms, line);
+            Lf(ms);
+        }
+
+        Feed(ms, 1);
+    }
+
+    private static IEnumerable<string> WrapPlainText(string text, int maxWidth)
+    {
+        foreach (var rawLine in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+
+            while (line.Length > maxWidth)
+            {
+                var breakAt = line.LastIndexOf(' ', Math.Min(maxWidth, line.Length - 1));
+                if (breakAt <= 0)
+                    breakAt = maxWidth;
+
+                yield return line[..breakAt].TrimEnd();
+                line = line[breakAt..].TrimStart();
+            }
+
+            if (line.Length > 0)
+                yield return line;
+        }
+    }
 
     private static void PrintContactLines(MemoryStream ms, string? landline, string? phone)
     {
@@ -690,9 +732,25 @@ public static class EscPosReceiptBuilder
 
 
 
-    private static void WriteItemLines(MemoryStream ms, ReceiptLineDto line) =>
+    private static void WriteItemLines(MemoryStream ms, ReceiptLineDto line)
+
+    {
 
         WriteItemLines(ms, line.ProductName, line.Size, line.Quantity, line.LineTotal, "");
+
+        if (line.RegularUnitPrice is { } regular && regular > line.UnitPrice)
+
+        {
+
+            var detail = $"   was {regular:0.00} now {line.UnitPrice:0.00} EGP";
+
+            T(ms, Truncate(detail, LineWidth));
+
+            Lf(ms);
+
+        }
+
+    }
 
 
 
@@ -712,7 +770,7 @@ public static class EscPosReceiptBuilder
 
     {
 
-        var desc = $"{prefix}{quantity}x {productName} {size}".Trim();
+        var desc = $"{prefix}{quantity}x {productName}".Trim();
 
         var price = $"{lineTotal:0.00} EGP";
 
@@ -722,7 +780,7 @@ public static class EscPosReceiptBuilder
 
 
 
-        if (ContainsArabic(productName) || ContainsArabic(size) || ContainsArabic(desc))
+        if (LabelFontResolver.ContainsArabic(productName) || LabelFontResolver.ContainsArabic(desc))
 
         {
 
@@ -775,36 +833,6 @@ public static class EscPosReceiptBuilder
             rest = rest.Length <= NameColWidth - 3 ? "" : rest[(NameColWidth - 3)..].TrimStart();
 
         }
-
-    }
-
-
-
-    private static bool ContainsArabic(string text)
-
-    {
-
-        foreach (var ch in text)
-
-        {
-
-            if (ch is >= '\u0600' and <= '\u06FF'
-
-                or >= '\u0750' and <= '\u077F'
-
-                or >= '\u08A0' and <= '\u08FF'
-
-                or >= '\uFB50' and <= '\uFDFF'
-
-                or >= '\uFE70' and <= '\uFEFF')
-
-                return true;
-
-        }
-
-
-
-        return false;
 
     }
 
@@ -1216,131 +1244,7 @@ public static class EscPosReceiptBuilder
 
         using var bitmap = SKBitmap.FromImage(image);
 
-        return bitmap is null ? null : SkBitmapToEscPosRaster(bitmap);
-
-    }
-
-
-
-    private static byte[] SkBitmapToEscPosRaster(SKBitmap bmp)
-
-    {
-
-        var w = bmp.Width;
-
-        var h = bmp.Height;
-
-        var bytesPerRow = (w + 7) / 8;
-
-        var data = new byte[bytesPerRow * h];
-
-
-
-        for (var y = 0; y < h; y++)
-
-        {
-
-            for (var x = 0; x < w; x++)
-
-            {
-
-                var p = bmp.GetPixel(x, y);
-
-                var lum = 0.299 * p.Red + 0.587 * p.Green + 0.114 * p.Blue;
-
-                if (p.Alpha > 128 && lum < 160)
-
-                    data[y * bytesPerRow + (x >> 3)] |= (byte)(0x80 >> (x & 7));
-
-            }
-
-        }
-
-
-
-        using var raster = new MemoryStream();
-
-        raster.WriteByte(0x1D);
-
-        raster.WriteByte(0x76);
-
-        raster.WriteByte(0x30);
-
-        raster.WriteByte(0x00);
-
-        raster.WriteByte((byte)(bytesPerRow & 0xFF));
-
-        raster.WriteByte((byte)((bytesPerRow >> 8) & 0xFF));
-
-        raster.WriteByte((byte)(h & 0xFF));
-
-        raster.WriteByte((byte)((h >> 8) & 0xFF));
-
-        raster.Write(data, 0, data.Length);
-
-        return raster.ToArray();
-
-    }
-
-
-
-    private static byte[] BitmapToEscPosRaster(Bitmap bmp)
-
-    {
-
-        var w = bmp.Width;
-
-        var h = bmp.Height;
-
-        var bytesPerRow = (w + 7) / 8;
-
-        var data = new byte[bytesPerRow * h];
-
-
-
-        for (var y = 0; y < h; y++)
-
-        {
-
-            for (var x = 0; x < w; x++)
-
-            {
-
-                var p = bmp.GetPixel(x, y);
-
-                var lum = 0.299 * p.R + 0.587 * p.G + 0.114 * p.B;
-
-                if (p.A > 128 && lum < 160)
-
-                    data[y * bytesPerRow + (x >> 3)] |= (byte)(0x80 >> (x & 7));
-
-            }
-
-        }
-
-
-
-        using var raster = new MemoryStream();
-
-        raster.WriteByte(0x1D);
-
-        raster.WriteByte(0x76);
-
-        raster.WriteByte(0x30);
-
-        raster.WriteByte(0x00);
-
-        raster.WriteByte((byte)(bytesPerRow & 0xFF));
-
-        raster.WriteByte((byte)((bytesPerRow >> 8) & 0xFF));
-
-        raster.WriteByte((byte)(h & 0xFF));
-
-        raster.WriteByte((byte)((h >> 8) & 0xFF));
-
-        raster.Write(data, 0, data.Length);
-
-        return raster.ToArray();
+        return bitmap is null ? null : EscPosRasterEncoder.ToEscPosRaster(bitmap);
 
     }
 

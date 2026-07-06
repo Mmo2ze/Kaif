@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using StoreShared;
 
 namespace StorePOS.Services;
 
@@ -11,11 +13,16 @@ public sealed class StoreApiAutoStartService
 {
     private static readonly Uri LocalApi = new("http://127.0.0.1:5050/");
 
+    private static readonly JsonSerializerOptions HealthJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private static string ApiExecutableName =>
         RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "StoreAPI.exe" : "StoreAPI";
 
     /// <summary>
-    /// Waits until /api/health succeeds or the deadline passes. Prefer 127.0.0.1 over "localhost" to avoid long IPv6/DNS timeouts.
+    /// Waits until /api/health succeeds with the expected label renderer or the deadline passes.
     /// </summary>
     public async Task<bool> EnsureApiAvailableAsync(Func<string?, Task>? statusAsync = null, CancellationToken cancellationToken = default)
     {
@@ -24,8 +31,20 @@ public sealed class StoreApiAutoStartService
 
         using var client = CreateProbeClient();
 
-        if (await TryHealthAsync(client, cancellationToken).ConfigureAwait(false))
+        if (await IsExpectedApiHealthyAsync(client, cancellationToken).ConfigureAwait(false))
             return true;
+
+        if (await IsAnyApiHealthyAsync(client, cancellationToken).ConfigureAwait(false))
+        {
+            if (statusAsync is not null)
+                await statusAsync("Replacing outdated store server…").ConfigureAwait(false);
+
+            StopStoreApiProcesses();
+            await Task.Delay(1500, cancellationToken).ConfigureAwait(false);
+
+            if (await IsExpectedApiHealthyAsync(client, cancellationToken).ConfigureAwait(false))
+                return true;
+        }
 
         if (statusAsync is not null)
             await statusAsync("Starting server…").ConfigureAwait(false);
@@ -40,7 +59,7 @@ public sealed class StoreApiAutoStartService
 
         while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
-            if (await TryHealthAsync(client, cancellationToken).ConfigureAwait(false))
+            if (await IsExpectedApiHealthyAsync(client, cancellationToken).ConfigureAwait(false))
                 return true;
 
             if (statusAsync is not null && (DateTime.UtcNow - lastProgressUtc).TotalSeconds >= 4)
@@ -56,7 +75,7 @@ public sealed class StoreApiAutoStartService
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
         }
 
-        return await TryHealthAsync(client, cancellationToken).ConfigureAwait(false);
+        return await IsExpectedApiHealthyAsync(client, cancellationToken).ConfigureAwait(false);
     }
 
     private static HttpClient CreateProbeClient()
@@ -72,16 +91,54 @@ public sealed class StoreApiAutoStartService
         };
     }
 
-    private static async Task<bool> TryHealthAsync(HttpClient client, CancellationToken ct)
+    private static async Task<bool> IsAnyApiHealthyAsync(HttpClient client, CancellationToken ct) =>
+        await FetchHealthAsync(client, ct).ConfigureAwait(false) is not null;
+
+    private static async Task<bool> IsExpectedApiHealthyAsync(HttpClient client, CancellationToken ct)
+    {
+        var health = await FetchHealthAsync(client, ct).ConfigureAwait(false);
+        return health is not null &&
+               string.Equals(health.LabelRenderVersion, StoreBuild.LabelRenderVersion, StringComparison.Ordinal);
+    }
+
+    private static async Task<HealthProbe?> FetchHealthAsync(HttpClient client, CancellationToken ct)
     {
         try
         {
             using var response = await client.GetAsync("api/health", ct).ConfigureAwait(false);
-            return response.IsSuccessStatusCode;
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            return await JsonSerializer.DeserializeAsync<HealthProbe>(stream, HealthJson, ct).ConfigureAwait(false);
         }
         catch
         {
-            return false;
+            return null;
+        }
+    }
+
+    private static void StopStoreApiProcesses()
+    {
+        foreach (var proc in Process.GetProcesses())
+        {
+            try
+            {
+                if (!proc.ProcessName.Equals("StoreAPI", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                LogLaunch($"Stopping stale StoreAPI pid={proc.Id}");
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+            {
+                LogLaunch($"Stop StoreAPI failed pid={proc.Id}: {ex.Message}");
+            }
+            finally
+            {
+                proc.Dispose();
+            }
         }
     }
 
@@ -179,4 +236,6 @@ public sealed class StoreApiAutoStartService
             /* ignore */
         }
     }
+
+    private sealed record HealthProbe(string? LabelRenderVersion, int? ApiVersion, string[]? Features);
 }

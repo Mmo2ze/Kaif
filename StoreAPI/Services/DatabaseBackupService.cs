@@ -73,6 +73,20 @@ public sealed class DatabaseBackupService : BackgroundService, IBackupRunner
         }
     }
 
+    public async Task<BackupArchiveResponse> CreateArchiveAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var (bytes, zipName) = await BuildBackupZipAsync(cancellationToken);
+            return new BackupArchiveResponse(true, bytes, zipName, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Backup archive download failed");
+            return new BackupArchiveResponse(false, null, null, ex.Message);
+        }
+    }
+
     private async Task RunScheduledBackupAsync(CancellationToken ct)
     {
         try
@@ -100,48 +114,23 @@ public sealed class DatabaseBackupService : BackgroundService, IBackupRunner
             return new BackupRunResponse(false, msg);
         }
 
-        var s = _options.Value;
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm", System.Globalization.CultureInfo.InvariantCulture);
         var zipName = $"store-backup-{timestamp}.zip";
-        var zipDir = Path.Combine(_environment.ContentRootPath, s.BackupTempFolder);
-        var zipPath = Path.Combine(zipDir, zipName);
-        var tempDb = Path.Combine(Path.GetTempPath(), $"store-backup-{timestamp}_{Guid.NewGuid():N}.db");
+        var (zipBytes, _) = await BuildBackupZipAsync(ct);
 
-        Directory.CreateDirectory(zipDir);
-
-        var sourceDbPath = SqlitePathHelper.ResolveDatabaseFilePath(_configuration, _environment);
-
-        await CreateDatabaseSnapshotAsync(sourceDbPath, tempDb, ct);
-
-        try
+        if (zipBytes.Length > DiscordMaxAttachmentBytes)
         {
-            await CreateZipFromFileAsync(tempDb, zipPath, $"store-backup-{timestamp}.db", ct);
-        }
-        finally
-        {
-            TryDeleteFile(tempDb);
-            TryDeleteFile(tempDb + "-wal");
-            TryDeleteFile(tempDb + "-shm");
-        }
-
-        var zipInfo = new FileInfo(zipPath);
-        if (zipInfo.Length > DiscordMaxAttachmentBytes)
-        {
-            try
-            {
-                File.Delete(zipPath);
-            }
-            catch
-            {
-                /* ignore */
-            }
-
             var msg =
-                $"Backup zip is {zipInfo.Length} bytes; Discord webhooks limit attachments to 25 MB.";
+                $"Backup zip is {zipBytes.Length} bytes; Discord webhooks limit attachments to 25 MB.";
             _logger.LogWarning("{Msg}", msg);
             await AppendBackupLogAsync($"FAIL {DateTime.UtcNow:O} {msg}", ct);
             return new BackupRunResponse(false, msg);
         }
+
+        var zipDir = Path.Combine(_environment.ContentRootPath, _options.Value.BackupTempFolder);
+        Directory.CreateDirectory(zipDir);
+        var zipPath = Path.Combine(zipDir, zipName);
+        await File.WriteAllBytesAsync(zipPath, zipBytes, ct);
 
         try
         {
@@ -149,15 +138,7 @@ public sealed class DatabaseBackupService : BackgroundService, IBackupRunner
         }
         finally
         {
-            try
-            {
-                if (File.Exists(zipPath))
-                    File.Delete(zipPath);
-            }
-            catch
-            {
-                /* ignore */
-            }
+            TryDeleteFile(zipPath);
         }
 
         await MarkLastBackupAsync(ct);
@@ -167,6 +148,31 @@ public sealed class DatabaseBackupService : BackgroundService, IBackupRunner
         await AppendBackupLogAsync(okLine, ct);
 
         return new BackupRunResponse(true, "Backup sent to Discord.");
+    }
+
+    private async Task<(byte[] Bytes, string ZipName)> BuildBackupZipAsync(CancellationToken ct)
+    {
+        var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm", System.Globalization.CultureInfo.InvariantCulture);
+        var zipName = $"store-backup-{timestamp}.zip";
+        var tempDb = Path.Combine(Path.GetTempPath(), $"store-backup-{timestamp}_{Guid.NewGuid():N}.db");
+        var zipPath = Path.Combine(Path.GetTempPath(), $"store-backup-{timestamp}_{Guid.NewGuid():N}.zip");
+
+        var sourceDbPath = SqlitePathHelper.ResolveDatabaseFilePath(_configuration, _environment.ContentRootPath);
+        await CreateDatabaseSnapshotAsync(sourceDbPath, tempDb, ct);
+
+        try
+        {
+            await CreateZipFromFileAsync(tempDb, zipPath, $"store-backup-{timestamp}.db", ct);
+            var bytes = await File.ReadAllBytesAsync(zipPath, ct);
+            return (bytes, zipName);
+        }
+        finally
+        {
+            TryDeleteFile(tempDb);
+            TryDeleteFile(tempDb + "-wal");
+            TryDeleteFile(tempDb + "-shm");
+            TryDeleteFile(zipPath);
+        }
     }
 
     /// <summary>
